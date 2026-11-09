@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""scout-browser: start, stop and list Scout's browser profiles on this host.
+
+Scout runs this over SSH. Every command prints one JSON object on stdout.
+
+    scout-browser start research --port 9301 --browser brave \
+        --window 1280,800 --locale en-US --timezone UTC
+    scout-browser stop research
+    scout-browser status [research]
+
+Each profile keeps its data in ~/profiles/<name>, so cookies and sign-ins
+survive restarts. The debugging port listens on 127.0.0.1 only; Scout reaches
+it through an SSH tunnel.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+HOME = Path(os.environ.get("SCOUT_BROWSER_HOME", Path.home()))
+PROFILES = HOME / "profiles"
+RUN = HOME / "run"
+LOGS = HOME / "logs"
+DISPLAY = os.environ.get("SCOUT_DISPLAY", ":99")
+
+BINARIES = {
+    "brave": ["brave-browser", "brave-browser-stable", "brave"],
+    "chrome": ["google-chrome", "google-chrome-stable"],
+    "chromium": ["chromium", "chromium-browser"],
+}
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+
+def out(obj: dict, code: int = 0) -> None:
+    print(json.dumps(obj))
+    sys.exit(code)
+
+
+def fail(msg: str) -> None:
+    out({"ok": False, "error": msg}, 1)
+
+
+def check_name(name: str) -> str:
+    if not NAME_RE.match(name):
+        fail(f"bad profile name {name!r}: use lowercase letters, digits, - and _")
+    return name
+
+
+def find_binary(browser: str) -> str:
+    for cand in BINARIES.get(browser, [browser]):
+        path = shutil.which(cand)
+        if path:
+            return path
+    fail(f"no binary found for browser {browser!r} (tried {BINARIES.get(browser, [browser])})")
+
+
+def cdp_version(port: int) -> dict | None:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as r:
+            return json.load(r)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def state(name: str) -> dict | None:
+    f = RUN / f"{name}.json"
+    if not f.exists():
+        return None
+    st = json.loads(f.read_text())
+    if not pid_alive(st["pid"]):
+        f.unlink(missing_ok=True)
+        return None
+    st["ready"] = cdp_version(st["port"]) is not None
+    return st
+
+
+def cmd_start(a) -> None:
+    name = check_name(a.profile)
+    st = state(name)
+    if st:
+        if st["port"] != a.port:
+            fail(f"profile {name} already running on port {st['port']}, not {a.port}")
+        out({"ok": True, "already_running": True, **st})
+    if cdp_version(a.port):
+        fail(f"port {a.port} is already in use by another browser")
+
+    for d in (PROFILES, RUN, LOGS):
+        d.mkdir(parents=True, exist_ok=True)
+    data_dir = PROFILES / name
+    w, h = a.window.split(",")
+    args = [
+        find_binary(a.browser),
+        f"--user-data-dir={data_dir}",
+        f"--remote-debugging-port={a.port}",
+        "--remote-debugging-address=127.0.0.1",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+        f"--window-size={w},{h}",
+        f"--lang={a.locale}",
+    ]
+    if a.headless:
+        args.append("--headless=new")
+    if a.proxy:
+        args.append(f"--proxy-server={a.proxy}")
+    if a.extension:
+        args.append("--load-extension=" + ",".join(a.extension))
+    args += a.flag or []
+
+    env = dict(os.environ, DISPLAY=DISPLAY, TZ=a.timezone, LANG=a.locale.replace("-", "_") + ".UTF-8")
+    log = open(LOGS / f"{name}.log", "ab")
+    proc = subprocess.Popen(args, env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                            start_new_session=True)
+    deadline = time.time() + a.wait
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            fail(f"browser exited with code {proc.returncode}; see {LOGS / (name + '.log')}")
+        ver = cdp_version(a.port)
+        if ver:
+            st = {"profile": name, "pid": proc.pid, "port": a.port, "browser": a.browser,
+                  "version": ver.get("Browser"), "data_dir": str(data_dir), "started": time.time()}
+            (RUN / f"{name}.json").write_text(json.dumps(st))
+            out({"ok": True, "already_running": False, "ready": True, **st})
+        time.sleep(0.25)
+    proc.terminate()
+    fail(f"browser did not open its debugging port within {a.wait}s")
+
+
+def cmd_stop(a) -> None:
+    name = check_name(a.profile)
+    st = state(name)
+    if not st:
+        out({"ok": True, "profile": name, "was_running": False})
+    os.killpg(st["pid"], signal.SIGTERM)
+    for _ in range(40):
+        if not pid_alive(st["pid"]):
+            break
+        time.sleep(0.25)
+    else:
+        os.killpg(st["pid"], signal.SIGKILL)
+    (RUN / f"{name}.json").unlink(missing_ok=True)
+    out({"ok": True, "profile": name, "was_running": True})
+
+
+def cmd_status(a) -> None:
+    names = [check_name(a.profile)] if a.profile else sorted(
+        p.name for p in PROFILES.iterdir() if p.is_dir()) if PROFILES.exists() else []
+    out({"ok": True, "display": DISPLAY,
+         "profiles": {n: (state(n) or {"running": False}) for n in names}})
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="scout-browser")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("start")
+    s.add_argument("profile")
+    s.add_argument("--port", type=int, required=True)
+    s.add_argument("--browser", default="brave")
+    s.add_argument("--window", default="1280,800")
+    s.add_argument("--locale", default="en-US")
+    s.add_argument("--timezone", default="UTC")
+    s.add_argument("--proxy")
+    s.add_argument("--extension", action="append")
+    s.add_argument("--flag", action="append", help="extra browser switch, e.g. --flag=--incognito")
+    s.add_argument("--headless", action="store_true")
+    s.add_argument("--wait", type=float, default=30)
+    s.set_defaults(fn=cmd_start)
+    t = sub.add_parser("stop")
+    t.add_argument("profile")
+    t.set_defaults(fn=cmd_stop)
+    u = sub.add_parser("status")
+    u.add_argument("profile", nargs="?")
+    u.set_defaults(fn=cmd_status)
+    a = ap.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

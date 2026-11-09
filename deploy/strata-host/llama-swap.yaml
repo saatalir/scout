@@ -1,0 +1,24 @@
+# llama-swap config for the Strata machine. NOT needed in Phase 0:
+# while Strata is the only model, LiteLLM (or Scout) talks to it directly.
+# Use this once an eval shows a role needs a second engine.
+#
+# llama-swap keeps one model loaded at a time and swaps on demand.
+# Run it on the Strata box and point STRATA_BASE_URL at llama-swap's port.
+
+healthCheckTimeout: 600   # Strata rebuilds its expert cache on start
+
+models:
+  strata:
+    # Check `strata launch --help` on your version: confirm the port flag and
+    # that the process stays in the foreground (llama-swap manages it).
+    cmd: strata launch --model <variant> --yes --no-tui
+    cmdStop: strata launch --stop
+    proxy: http://127.0.0.1:8080
+
+  qwen-vl:
+    cmd: llama-server -m /models/qwen-vl.gguf --mmproj /models/qwen-vl-mmproj.gguf --port 9001
+    proxy: http://127.0.0.1:9001
+
+  extractor-9b:
+    cmd: llama-server -m /models/qwen-9b.gguf --port 9002
+    proxy: http://127.0.0.1:9002

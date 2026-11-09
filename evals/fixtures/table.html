@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Datasets</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; margin: 40px 60px; color: #1d2330; }
+  h1 { font-size: 22px; }
+  table { border-collapse: collapse; width: 900px; font-size: 15px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid #dde1e7; }
+  th { background: #eef1f5; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pager { margin-top: 24px; display: flex; gap: 10px; align-items: center; font-size: 14px; }
+  .pager button { padding: 8px 16px; font-size: 14px; border: 1px solid #c8ccd4; background: #fff; border-radius: 4px; }
+</style></head>
+<body>
+<h1>Commercial energy datasets — subscription prices</h1>
+<table>
+  <tr><th>Dataset</th><th>Provider</th><th>Coverage</th><th>Monthly price (EUR)</th></tr>
+  <tr><td>GridPulse Telemetry</td><td>Voltwise</td><td>EU, hourly</td><td class="num">420</td></tr>
+  <tr><td>FlowMap Gas Nominations</td><td>Pipeline Insight</td><td>EU + UK, daily</td><td class="num">1,150</td></tr>
+  <tr><td>Solar Yield Atlas</td><td>Heliodata</td><td>Global, 15-min</td><td class="num">980</td></tr>
+  <tr><td>LNG Cargo Tracker</td><td>SeaTrace</td><td>Global, real-time</td><td class="num">1,090</td></tr>
+  <tr><td>Weather Normals Pro</td><td>ClimaBase</td><td>Global, daily</td><td class="num">260</td></tr>
+</table>
+<div class="pager">
+  <button id="prev">Previous page</button>
+  <span>Page 1 of 4</span>
+  <button id="next">Next page</button>
+</div>
+</body></html>

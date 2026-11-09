@@ -1,0 +1,45 @@
+# LiteLLM proxy: maps Scout's roles to physical models.
+# Rendered to config/litellm.generated.yaml by scripts/render_litellm_config.py,
+# which fills {{STRATA_MODEL}} with the id Strata reports at /v1/models.
+#
+# Run on the Mac:  litellm --config config/litellm.generated.yaml --port 4000
+# then set SCOUT_ROUTER=litellm in .env.
+#
+# To move a role to the cloud later, change only its litellm_params, e.g.
+#   model: anthropic/claude-sonnet-4-5   api_key: os.environ/ANTHROPIC_API_KEY
+
+model_list:
+  - model_name: planner
+    litellm_params:
+      model: openai/{{STRATA_MODEL}}
+      api_base: os.environ/STRATA_BASE_URL
+      api_key: os.environ/STRATA_API_KEY
+
+  - model_name: browser
+    litellm_params:
+      model: openai/{{STRATA_MODEL}}
+      api_base: os.environ/STRATA_BASE_URL
+      api_key: os.environ/STRATA_API_KEY
+
+  - model_name: vision
+    litellm_params:
+      model: openai/{{STRATA_MODEL}}
+      api_base: os.environ/STRATA_BASE_URL
+      api_key: os.environ/STRATA_API_KEY
+    model_info:
+      supports_vision: true
+
+  - model_name: extractor
+    litellm_params:
+      model: openai/{{STRATA_MODEL}}
+      api_base: os.environ/STRATA_BASE_URL
+      api_key: os.environ/STRATA_API_KEY
+
+litellm_settings:
+  # Strata serves one request stream well; don't let LiteLLM fan out retries.
+  num_retries: 1
+  request_timeout: 300
+  drop_params: true   # silently drop params Strata does not accept
+
+general_settings:
+  master_key: os.environ/LITELLM_API_KEY

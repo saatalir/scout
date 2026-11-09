@@ -1,0 +1,18 @@
+# Proposed Phase 0 gate thresholds. Adjust after the first baseline run.
+# pass_rate  = share of cases that pass every check
+# mean_score = average partial credit (0..1)
+
+tool_calling: {pass_rate: 0.90}
+extraction:   {mean_score: 0.90}
+agent_loop:   {pass_rate: 0.80, mean_score: 0.90}
+vision:       {pass_rate: 0.70}
+speed:
+  max_ttft_s: 8          # short prompt, first token
+  min_decode_tok_per_s: 15
+
+# Which suites decide whether each role can stay on Strata.
+roles:
+  planner:   [tool_calling, agent_loop]
+  browser:   [tool_calling, agent_loop]
+  vision:    [vision]
+  extractor: [extraction]

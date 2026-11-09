@@ -1,0 +1,91 @@
+# Browser hosts and profiles Scout can drive.
+#
+# A host is a machine that runs browsers. A profile is one browser with its own
+# settings and its own saved data (cookies, sign-ins), kept on that host between
+# tasks. Sign in to a site once through the host's live view and every later
+# task that uses the profile is signed in too.
+#
+# Scout reaches a remote host over SSH with its own key (~/.ssh/scout_ed25519), asks
+# the `scout-browser` helper there to start the profile, then tunnels the
+# browser's debugging port back over that SSH connection. The port never
+# listens on anything but the host's loopback interface.
+
+hosts:
+  # The browser VM (see docs/SETUP.md §5). Machine-specific values come from
+  # .env; ${VAR:-default} falls back to the default when VAR is unset.
+  browser-vm:
+    kind: ssh
+    address: ${SCOUT_VM_HOST:-browser-vm}         # tailnet name or 100.x address
+    user: ${SCOUT_VM_USER:-scout}
+    identity_file: ${SCOUT_SSH_KEY:-~/.ssh/scout_ed25519}
+    helper: /usr/local/bin/scout-browser
+    # Where you watch and take over (sign-ins, CAPTCHAs). Served tailnet-only
+    # by `tailscale serve` on the VM; see deploy/browser-vm/README.md.
+    live_view: https://${SCOUT_VM_HOST:-browser-vm}.${SCOUT_TAILNET:-example.ts.net}/vnc.html?autoconnect=1&resize=remote
+
+  local:
+    kind: local          # launches on this Mac; for development and tests
+    live_view: null
+
+# Settings every profile starts from; a profile overrides any of them.
+defaults:
+  browser: brave         # brave | chrome | chromium
+  headless: false        # a visible window on the host's virtual screen, so you can watch
+  window: [1280, 800]
+  locale: en-US
+  timezone: ${SCOUT_TIMEZONE:-UTC}   # IANA name, e.g. Europe/Berlin
+  proxy: null            # e.g. socks5://10.0.0.5:1080
+  extensions: []         # unpacked extension folders on the host
+  flags: []              # extra command-line switches, passed as given
+  stop_on_exit: false    # keep the browser running between tasks (faster, sessions stay warm)
+
+profiles:
+  # General web research and search.
+  research:
+    host: browser-vm
+    port: 9301
+
+  # Discreet research: every request leaves through the Tor network (the VM's
+  # tor service, SOCKS on 127.0.0.1:9050). Hides the VM's IP address from the
+  # sites visited; it does not make Brave as fingerprint-resistant as Tor Browser.
+  # Expect more bot checks: many sites and search engines distrust Tor exits.
+  research-tor:
+    host: browser-vm
+    port: 9302
+    proxy: socks5://127.0.0.1:9050
+    timezone: UTC          # the Tor Browser convention; a local time zone would stand out
+    flags:
+      # No DNS outside Tor: every hostname is resolved by the Tor exit.
+      - "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
+      # WebRTC must not reveal the VM's real address with UDP around the proxy.
+      - "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+      - "--webrtc-ip-handling-policy=disable_non_proxied_udp"
+      - "--disable-quic"
+
+  # One profile per site you sign in to keeps sessions apart. Example:
+  # jobs:
+  #   host: browser-vm
+  #   port: 9303
+  #   locale: de-DE
+
+  # Local throwaway profile for tests: Playwright's bundled Chromium, headless.
+  local-test:
+    host: local
+    browser: chromium
+    headless: true
+    port: 0              # 0 = pick a free port
+    stop_on_exit: true
+
+search:
+  profile: research            # used when Tor is off
+  tor_profile: research-tor    # used when Tor is on
+  # Tor mode for searches that do not choose for themselves:
+  #   ask = Scout asks the user (on or off) before searching; the default
+  #   on  = always through Tor;  off = always direct
+  tor: ${SCOUT_TOR:-ask}
+  # Tried in order. The next engine is used only when the ones before it are
+  # blocked or have not produced enough results.
+  engines: [duckduckgo, brave, google]
+  results_wanted: 10
+  max_pages_per_engine: 3
+  pause_seconds: [2, 5]  # polite delay between result pages on the same engine

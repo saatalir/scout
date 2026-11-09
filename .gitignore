@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+results/*
+!results/.gitkeep
+evals/.cache/
+config/litellm.generated.yaml
+*.egg-info/
+.DS_Store
+deploy/browser-vm/authorized_keys

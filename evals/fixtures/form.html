@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Apply</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; margin: 0; background: #f4f5f7; color: #1d2330; }
+  header { background: #12324f; color: #fff; padding: 18px 40px; font-size: 20px; font-weight: bold; }
+  main { width: 640px; margin: 36px auto; background: #fff; padding: 32px 40px; border-radius: 8px; }
+  h1 { font-size: 22px; margin-top: 0; }
+  label { display: block; font-size: 14px; margin: 18px 0 6px; color: #4a5263; }
+  input { width: 100%; box-sizing: border-box; padding: 10px; font-size: 15px; border: 1px solid #c8ccd4; border-radius: 4px; }
+  input.bad { border-color: #c62828; }
+  .error { color: #c62828; font-size: 13px; margin-top: 6px; }
+  .actions { margin-top: 30px; display: flex; gap: 12px; justify-content: flex-end; }
+  button { font-size: 15px; padding: 11px 20px; border-radius: 4px; border: 1px solid #c8ccd4; background: #fff; }
+  button.primary { background: #1a66d1; border-color: #1a66d1; color: #fff; font-weight: bold; }
+</style></head>
+<body>
+<header>Helios Energy · Careers</header>
+<main>
+  <h1>Data Engineer (Grid Analytics) — Application</h1>
+  <label for="name">Full name</label>
+  <input id="name" value="Nikos Georgiou">
+  <label for="email">Email</label>
+  <input id="email" value="n.georgiou@example.org">
+  <label for="phone">Phone</label>
+  <input id="phone" class="bad" value="6941234567">
+  <div class="error">Phone number must start with +30</div>
+  <div class="actions">
+    <button id="back">Back</button>
+    <button id="draft">Save draft</button>
+    <button id="submit" class="primary">Submit application</button>
+  </div>
+</main>
+</body></html>
