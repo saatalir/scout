@@ -1,6 +1,6 @@
 # AGENTS.md — working in this repository
 
-This file is for coding agents. It gives you the facts you need to change this repository safely. For setting up the machines, read [docs/SETUP.md](docs/SETUP.md).
+This file is for coding agents. It gives you the facts you need to change this repository safely. For setting up the machines, read [docs/SETUP.md](docs/SETUP.md). For the model server (Strata: launch, publishing on the tailnet, API key), read [docs/STRATA.md](docs/STRATA.md).
 
 ## 1. What this is
 

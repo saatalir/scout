@@ -102,6 +102,8 @@ free -g          # on <strata-host>: the "available" column is what new VMs can 
 
 ## 3. The model server (Strata)
 
+> The full server-side procedure is in **[STRATA.md](STRATA.md)**: installing Strata, `strata launch` and its presets, publishing with `tailscale serve`, the API key, layer-by-layer checks and operations. This section summarises what Scout needs.
+
 Scout needs only Strata's **OpenAI-compatible endpoint**, reachable from the workstation:
 
 | Setting | Value |

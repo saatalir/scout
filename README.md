@@ -10,6 +10,7 @@ A local-first web agent. It researches a topic and downloads papers and data, or
 | Doc | For |
 | --- | --- |
 | [docs/SETUP.md](docs/SETUP.md) | Building the whole system from scratch, verifying it, and troubleshooting. |
+| [docs/STRATA.md](docs/STRATA.md) | Serving Qwen3.8 with Strata on the GPU server and reaching it over the tailnet. |
 | [AGENTS.md](AGENTS.md) | Coding agents working in this repository: map, invariants, commands, conventions. |
 | [deploy/browser-vm/README.md](deploy/browser-vm/README.md) | Quick reference for the browser VM. |
 
@@ -58,6 +59,7 @@ deploy/browser-vm/      setup.sh and the scout-browser helper for the browser VM
 deploy/strata-host/     llama-swap template (only if a role ever needs a second engine)
 tests/                  offline tests: browser layer, simulated agent environments, smoke tests vs. a mock server
 docs/SETUP.md           the setup guide
+docs/STRATA.md          serving the model with Strata and publishing it on the tailnet
 results/                eval output (not committed)
 ```
 
