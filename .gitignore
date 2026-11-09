@@ -10,3 +10,5 @@ config/litellm.generated.yaml
 *.egg-info/
 .DS_Store
 deploy/browser-vm/authorized_keys
+/tasks/
+/library-inbox/

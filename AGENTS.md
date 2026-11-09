@@ -17,7 +17,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 
 - Phase 0 (model feasibility) is done.
 - The browser layer is done and verified live.
-- Phase 1 (task record, academic APIs, library hand-off, sub-agents, planner loop, CLI, Phase 1 eval) is **not started**.
+- Phase 1 (Research Scout) is **in progress**: task record, tier 1 APIs, fetch/download, library hand-off, planner loop, CLI and the fixed task eval set are built; parallel sub-agents are next. See [docs/PHASE1.md](docs/PHASE1.md).
 
 ## 2. Repository map
 
@@ -30,6 +30,14 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/browser/session.py` | CDP attach; closes only Scout's own tabs on exit | `open_browser(profile, cfg)` (async context manager) → `BrowserSession` |
 | `scout/tools/search.py` | Engines, fallback, Tor choice | `web_search()`, `search_with()`, `resolve_tor()`, `TorChoiceRequired`, `ENGINES`, `SearchOutcome` |
 | `scout/tools/scrub.py` | Removes location and session data from captured HTML | `scrub_html()` |
+| `scout/agent.py` | Orchestrator: planner loop over the tools; approval gate; hand-off to a human | `Scout(record, llm=, ask_approval=).run()`, `TOOLS`, `SYSTEM`, `run_task()` |
+| `scout/task.py` | Task record, saved atomically after every step; pause/resume | `TaskRecord.create/load/log/save`, `tasks_dir()` |
+| `scout/library.py` | Knowledge-library output contract and deduplication | `save_item(Item, task_id=, body=, file=)`, `find_existing()`, `read_front_matter()` |
+| `scout/net.py` | HTTP client for tools; Tor on = SOCKS over an SSH tunnel to the VM's tor | `http_client(tor)`, `TorUnavailable` |
+| `scout/tools/academic.py` | Tier 1: arXiv, OpenAlex, Crossref → one `Paper` shape | `search_papers(client, query, source, …)` |
+| `scout/tools/web.py` | Tier 2: page → Markdown; downloads verified by type, size and PDF title | `fetch_page()`, `download_file()`, `pdf_text()` |
+| `scout/cli.py` | `python -m scout run/resume/show/list`; asks the Tor question and approvals on the terminal | `main()` |
+| `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (17 tasks, phase-tagged) and its runner/checks | `python -m evals.phase_tasks` |
 | `deploy/browser-vm/scout-browser` | Helper on the VM (stdlib-only Python); one JSON object per call | `start`, `stop`, `status` |
 | `deploy/browser-vm/setup.sh` | Idempotent VM setup (root) | — |
 | `config/browsers.yaml` | Hosts, profiles (`research`, `research-tor`, `local-test`), search and Tor settings | — |
@@ -49,6 +57,10 @@ This file is for coding agents. It gives you the facts you need to change this r
 7. **No personal or machine data in the repository.** Hostnames, the tailnet, users, IP addresses, keys and locations belong in `.env` (git-ignored). `config/browsers.yaml` uses `${VAR:-default}` placeholders. Captured pages go through `scrub_html` (`browser_check.py --capture` does this), and `test_fixtures_are_scrubbed` enforces it.
 8. **Scout's SSH key is used with `-i <key> -o IdentitiesOnly=yes -o BatchMode=yes`.** Never add password prompts or interactive SSH to Scout's code paths.
 9. **`open_browser` must leave the user's tabs alone.** It closes only pages Scout opened. Remote browsers keep running (`stop_on_exit: false`) so sign-ins persist.
+10. **All tool HTTP goes through `scout.net.http_client(tor)`.** Never create an `httpx.Client` in a tool: with Tor on, every request (APIs included) must leave through Tor, and `TorUnavailable` must stop the task, never fall back to direct.
+11. **Nothing reaches the library unverified.** `save_to_library` refuses a download whose verification failed; saves are deduplicated by DOI, arXiv id, URL and file hash (`scout/library.py`). Keep the front-matter contract fields stable: the library's ingestion depends on them.
+12. **The task record is the source of truth.** Every tool call is logged with `TaskRecord.log`; a task must be resumable from `task.json` alone.
+13. **Do not change a task's checks in `evals/tasks/tasks.yaml`** once results exist for it; add a new task instead, so runs stay comparable.
 
 ## 4. Commands
 
@@ -79,6 +91,8 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | Add a browser profile | `profiles:` in `config/browsers.yaml`, with a unique port per host | Run `browser_check.py <profile>` |
 | Add a profile setting | `Profile` + `parse_browser_config()` in `scout/browser/config.py`; `helper_start_args()` in `hosts.py`; the argument in `deploy/browser-vm/scout-browser` | Rerun `setup.sh` on the VM (it reinstalls the helper); run `pytest` |
 | Add a machine-specific value | `.env.example` (placeholder) + `.env` (real), referenced as `${VAR:-default}` | Never hard-code the value |
+| Add an agent tool | Schema in `TOOLS` + a branch in `Scout.call()` in `scout/agent.py`; HTTP via the client passed in | Tests with `FakeLLM` and `mock_client` in `tests/test_phase1.py` |
+| Add an academic source | A `search_<source>()` returning `Paper` in `scout/tools/academic.py`; add it to `SOURCES` | A mock response in `tests/test_phase1.py` |
 | Add an eval case | `evals/suites/<suite>.py` | Run `pytest` (smoke tests run every suite against the mock server), then `evals.run --suites <suite>` |
 | Change a gate threshold | `evals/thresholds.yaml` | Record the reason in the commit message |
 
@@ -104,3 +118,5 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_TIMEZONE` | IANA name | Time zone for non-Tor profiles |
 | `SCOUT_SCRUB_PLACES`, `SCOUT_SCRUB_REGIONS` | comma lists | What `scrub_html` removes from captures |
 | `SCOUT_BROWSERS_FILE` | path | Alternative to `config/browsers.yaml` |
+| `SCOUT_LIBRARY_DIR` | path | The knowledge library's inbox (default `./library-inbox`) |
+| `SCOUT_TASKS_DIR` | path | Task records (default `./tasks`) |

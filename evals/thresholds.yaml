@@ -16,3 +16,7 @@ roles:
   browser:   [tool_calling, agent_loop]
   vision:    [vision]
   extractor: [extraction]
+
+# Task eval (evals/phase_tasks.py, evals/tasks/tasks.yaml): share of tasks that
+# pass every check. Proposed; set for real after the first baseline run.
+phase1_tasks: {pass_rate: 0.75}
