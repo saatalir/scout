@@ -1,5 +1,7 @@
 ---
 files: ["scout/tools/datasets.py", "tests/test_datasets.py"]
+context: ["scout/tools/academic.py"]
+tests: ["tests/test_datasets.py"]
 ---
 # A3 + A4: dataset sources (Zenodo, CKAN open-data portals)
 
@@ -78,4 +80,4 @@ CKAN: mapping; base URL with a trailing slash; `success: false` → RuntimeError
 URL's file name; format upper-cased. search_datasets dispatch and the ValueError. Dataset.to_dict cuts long
 descriptions and drops empty fields.
 
-Run `./run-tests tests/test_datasets.py` until it passes, then `./run-tests` (the whole suite must pass).
+The harness runs `tests/test_datasets.py` and sends you any failures.

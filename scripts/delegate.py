@@ -1,32 +1,35 @@
-"""Delegate a well-specified coding task to Strata (via opencode) in an isolated git clone.
+"""Delegate a well-specified coding task to Strata: it writes code, it never runs anything.
 
-    python scripts/delegate.py start <name> [--minutes 45]   # spec: docs/delegation/<name>.md
-    python scripts/delegate.py check <name>                  # rerun the tests, show the diff, enforce allowed files
-    python scripts/delegate.py merge <name>                  # apply the reviewed change to this checkout (uncommitted)
-    python scripts/delegate.py drop  <name>                  # remove the clone
+    python scripts/delegate.py start <name> [--rounds 4]   # spec: docs/delegation/<name>.md
+    python scripts/delegate.py check <name>                # rerun the task's tests (sandboxed), list the files
+    python scripts/delegate.py merge <name>                # copy the reviewed files into this checkout (uncommitted)
+    python scripts/delegate.py drop  <name>                # remove the scratch copy
 
-How it is contained (docs/ROADMAP.md §2):
-- The work happens in a standalone clone, ../online-scout-delegate/<name> (branch delegate/<name>,
-  from HEAD). Not a git worktree: opencode resolves a worktree to the main repository and then
-  ignores the worktree's policy. Commit what the task depends on before starting.
-- opencode runs with --standalone (a private server, not the shared background service), and a
-  preflight confirms it loaded the clone's opencode.json; otherwise nothing runs.
-- The main checkout's state is recorded before and after the run; any change is an ESCAPE and
-  blocks merge.
-- An opencode.json there allows editing and reading inside the clone and running
-  ./run-tests; it denies every other shell command, web access, sub-tasks and any
-  path outside the clone. Explicit denies hold even with --auto.
-- The spec's front matter lists the files the task may touch (`files:`, globs); `check`
-  fails if anything else changed. Nothing is merged without `check` passing and review.
-- .env is not in the clone; only STRATA_API_KEY is passed to opencode itself.
+Why this shape (docs/ROADMAP.md §2): an earlier version ran opencode with --auto. Its permission
+policy did not hold reliably: in one run it wrote outside its clone and ran `git stash` in the main
+checkout. So the model gets no tools at all:
+
+1. The harness sends Strata (role "planner") the spec, the files it may change (current content) and
+   the context files the spec lists. Strata replies with complete files in a fixed block format.
+2. The harness writes only files the spec allows (`files:` globs) into a scratch copy of the tracked
+   files (../online-scout-delegate/<name>), never into this checkout.
+3. It runs the spec's tests there under macOS sandbox-exec: no network except localhost, no writes
+   outside the copy and temp folders. Failures go back to Strata for another round (`rounds`, default 4).
+4. A human/Claude reviews the files, runs the whole suite, and merges. Nothing lands unreviewed.
+
+Spec front matter:
+    files:   [globs Strata may create or change]
+    context: [extra files to show it, read-only]          (optional)
+    tests:   [pytest paths to run in the sandbox]
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import fnmatch
 import json
-import os
+import re
 import shutil
 import subprocess
 import sys
@@ -34,43 +37,33 @@ import time
 from pathlib import Path
 
 import yaml
-from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 WT_ROOT = ROOT.parent / "online-scout-delegate"
 SPECS = ROOT / "docs" / "delegation"
-OPENCODE = shutil.which("opencode") or str(Path.home() / ".opencode/bin/opencode")
 PYTHON = ROOT / ".venv" / "bin" / "python"
-LOCAL_FILES = ("opencode.json", "run-tests", ".delegate-log.jsonl", ".delegate-result.json")
+FILE_BLOCK = re.compile(r"^=== FILE: (?P<path>[^\n=]+?) ===\n(?P<body>.*?)\n=== END FILE ===", re.M | re.S)
 
-POLICY = {
-    "$schema": "https://opencode.ai/config.json",
-    "permission": {
-        "read": "allow", "edit": "allow", "glob": "allow", "grep": "allow", "list": "allow",
-        "lsp": "allow", "todowrite": "allow",
-        "external_directory": "deny", "webfetch": "deny", "websearch": "deny",
-        "task": "deny", "question": "deny", "skill": "deny",
-        "bash": {"*": "deny", "./run-tests*": "allow", "ls*": "allow",
-                 "git status*": "allow", "git diff*": "allow"},
-    },
-}
+SYSTEM = """You write code for the Online Scout repository (Python 3.12). You cannot run anything: the harness
+runs the tests and sends you any failures. Follow the repository's conventions and AGENTS.md (included).
+Reply with the COMPLETE content of every file you create or change, each in exactly this format:
 
-PREAMBLE = """You are implementing one well-specified change in the Online Scout repository (Python 3.12).
-Read AGENTS.md first: its invariants apply. Work only on the files the spec lists.
-Run the tests with ./run-tests (it accepts pytest arguments, e.g. ./run-tests tests/test_x.py -q).
-Other shell commands and web access are not available to you; do not try to work around that.
-Iterate until ./run-tests passes completely. Do not weaken or delete existing tests to make them pass.
-When done, reply with a short summary: files changed, what they do, final test result.
+=== FILE: path/relative/to/repo.py ===
+<entire file content, no markdown fences>
+=== END FILE ===
 
-THE SPEC:
-"""
+Only write files the spec allows. Do not weaken tests to make them pass. After the files, add one short
+paragraph saying what you did."""
 
 
-def sh(*cmd: str, cwd: Path = ROOT, check: bool = True) -> str:
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    if check and r.returncode:
-        raise SystemExit(f"{' '.join(cmd)} failed:\n{r.stderr.strip() or r.stdout.strip()}")
-    return r.stdout
+def sandbox_profile(copy: Path) -> str:
+    real = copy.resolve()
+    return ("(version 1)(allow default)"
+            "(deny network-outbound)(allow network-outbound (remote ip \"localhost:*\"))"
+            "(allow network-outbound (remote unix-socket))"
+            f"(deny file-write* (require-not (require-any (subpath \"{real}\") (subpath \"/private/var/folders\")"
+            " (subpath \"/private/tmp\") (subpath \"/dev\"))))")
 
 
 def load_spec(name: str) -> tuple[dict, str]:
@@ -82,131 +75,145 @@ def load_spec(name: str) -> tuple[dict, str]:
     if text.startswith("---\n"):
         head, text = text[4:].split("\n---\n", 1)
         meta = yaml.safe_load(head) or {}
-    if not meta.get("files"):
-        raise SystemExit("the spec needs front matter with `files:` (globs the task may change)")
+    for key in ("files", "tests"):
+        if not meta.get(key):
+            raise SystemExit(f"the spec needs front matter `{key}:`")
     return meta, text.strip()
 
 
-def wt(name: str) -> Path:
+def copy_dir(name: str) -> Path:
     return WT_ROOT / name
 
 
-def start(name: str, minutes: int) -> int:
+def allowed(meta: dict, path: str) -> bool:
+    return any(fnmatch.fnmatch(path, g) for g in meta["files"])
+
+
+def make_copy(name: str) -> Path:
+    dest = copy_dir(name)
+    if dest.exists():
+        raise SystemExit(f"{dest} exists: `drop {name}` first")
+    files = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    for rel in filter(None, files.split("\0")):
+        src = ROOT / rel
+        if src.is_file():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / rel)
+    (dest / ".delegate").mkdir()
+    return dest
+
+
+def run_tests(copy: Path, tests: list[str]) -> tuple[bool, str]:
+    cmd = ["sandbox-exec", "-p", sandbox_profile(copy), str(PYTHON), "-m", "pytest", "-q", "-p", "no:cacheprovider",
+           *tests]
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(copy), "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
+    try:
+        r = subprocess.run(cmd, cwd=copy, capture_output=True, text=True, env=env, timeout=600)
+    except subprocess.TimeoutExpired:
+        return False, "the tests did not finish within 10 minutes"
+    out = (r.stdout + r.stderr).strip()
+    return r.returncode == 0, out
+
+
+def prompt_for(meta: dict, body: str, copy: Path) -> str:
+    parts = [f"THE SPEC:\n{body}\n", f"Files you may create or change: {', '.join(meta['files'])}",
+             f"Tests that must pass: {' '.join(meta['tests'])}\n"]
+    shown = ["AGENTS.md", *meta.get("context", [])]
+    for rel in shown:
+        p = copy / rel
+        if p.is_file():
+            parts.append(f"--- context file (read-only): {rel} ---\n{p.read_text()}")
+    for p in sorted(copy.rglob("*")):
+        rel = str(p.relative_to(copy))
+        if p.is_file() and allowed(meta, rel) and rel not in shown:
+            parts.append(f"--- current content of {rel} (you may change it) ---\n{p.read_text()}")
+    return "\n\n".join(parts)
+
+
+def apply_files(meta: dict, copy: Path, text: str) -> tuple[list[str], list[str]]:
+    written, refused = [], []
+    for m in FILE_BLOCK.finditer(text):
+        rel = m.group("path").strip().lstrip("./")
+        body = m.group("body")
+        body = re.sub(r"^```[a-z]*\n|\n```$", "", body)          # tolerate fences despite the instructions
+        if ".." in Path(rel).parts or not allowed(meta, rel):
+            refused.append(rel)
+            continue
+        (copy / rel).parent.mkdir(parents=True, exist_ok=True)
+        (copy / rel).write_text(body.rstrip("\n") + "\n")
+        written.append(rel)
+    return written, refused
+
+
+def start(name: str, rounds: int) -> int:
+    from scout.config import load_settings
+    from scout.llm import LLM
+
     meta, body = load_spec(name)
-    if sh("git", "status", "--porcelain", "--", f"docs/delegation/{name}.md").strip():
-        raise SystemExit(f"commit docs/delegation/{name}.md first: the clone is made from HEAD")
-    path = wt(name)
-    if path.exists():
-        raise SystemExit(f"{path} exists: `drop {name}` first, or `check {name}`")
-    WT_ROOT.mkdir(exist_ok=True)
-    sh("git", "clone", "-q", "--no-hardlinks", str(ROOT), str(path))
-    sh("git", "checkout", "-q", "-b", f"delegate/{name}", cwd=path)
-    (path / ".git" / "info" / "exclude").write_text("\n".join(LOCAL_FILES) + "\n")
-
-    (path / "opencode.json").write_text(json.dumps(POLICY, indent=1))
-    runner = path / "run-tests"
-    runner.write_text(f'#!/bin/sh\ncd "$(dirname "$0")" && PYTHONPATH="$PWD" exec "{PYTHON}" -m pytest -q -p no:cacheprovider "$@"\n')
-    runner.chmod(0o755)
-
-    key = os.environ.get("STRATA_API_KEY") or dotenv_values(ROOT / ".env").get("STRATA_API_KEY") or ""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("SCOUT_", "LITELLM_"))}
-    env["STRATA_API_KEY"] = key
-    message = PREAMBLE + body + f"\n\nFiles you may change: {', '.join(meta['files'])}\n"
-    preflight(path, env)
-    main_before = main_state()
-    log = path / ".delegate-log.jsonl"
+    copy = make_copy(name)
+    llm = LLM(dataclasses.replace(load_settings(), request_timeout=1800))     # long files take minutes to write
+    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt_for(meta, body, copy)}]
+    result = {"name": name, "rounds": 0, "passed": False, "files": [], "refused": []}
     t0 = time.time()
-    print(f"delegating {name} to Strata via opencode in {path} (limit {minutes} min)…", flush=True)
-    with open(log, "w") as out:
-        proc = subprocess.Popen([OPENCODE, "run", "--standalone", "--auto", "--format", "json",
-                                 "--title", f"delegate {name}", message],
-                                cwd=path, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            code = proc.wait(timeout=minutes * 60)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            code = "timeout"
-    escaped = main_state() != main_before
-    result = {"name": name, "exit": code, "minutes": round((time.time() - t0) / 60, 1), "escaped": escaped}
-    (path / ".delegate-result.json").write_text(json.dumps(result))
+    for n in range(1, rounds + 1):
+        print(f"round {n}: asking Strata…", flush=True)
+        r = llm.chat("planner", messages, max_tokens=24000, temperature=0.0)
+        text = r.text
+        (copy / ".delegate" / f"round-{n}.txt").write_text(text)
+        messages.append({"role": "assistant", "content": text})
+        written, refused = apply_files(meta, copy, text)
+        result["files"] = sorted(set(result["files"]) | set(written))
+        result["refused"] += refused
+        if not written:
+            messages.append({"role": "user", "content": "No files found in your reply. Reply with complete files in "
+                                                        "the === FILE: path === / === END FILE === format."})
+            continue
+        ok, out = run_tests(copy, meta["tests"])
+        print(f"round {n}: wrote {written}{' refused ' + str(refused) if refused else ''}; "
+              f"tests {'PASS' if ok else 'FAIL'}: {out.splitlines()[-1] if out else ''}", flush=True)
+        result["rounds"] = n
+        if ok:
+            result["passed"] = True
+            break
+        messages.append({"role": "user", "content": "The tests failed. Output (end):\n" + out[-6000:]
+                         + "\n\nFix the code (not the requirements) and reply with the complete corrected files."})
+    result["minutes"] = round((time.time() - t0) / 60, 1)
+    (copy / ".delegate" / "result.json").write_text(json.dumps(result, indent=1))
     print(json.dumps(result))
-    return check(name)
-
-
-def main_state() -> str:
-    """Status plus contents of every changed file in the main checkout, to detect writes from outside."""
-    status = sh("git", "status", "--porcelain", "--untracked-files=all")
-    digest = [status]
-    for line in status.splitlines():
-        f = ROOT / line[3:].split(" -> ")[-1]
-        if f.is_file():
-            digest.append(f"{f}:{f.stat().st_mtime_ns}:{f.stat().st_size}")
-    return "\n".join(digest)
-
-
-def preflight(path: Path, env: dict) -> None:
-    """opencode must report the clone's own opencode.json among its config sources."""
-    r = subprocess.run([OPENCODE, "--standalone", "debug", "config"], cwd=path, env=env, capture_output=True, text=True)
-    if str((path / "opencode.json").resolve()) not in r.stdout and str(path / "opencode.json") not in r.stdout:
-        raise SystemExit("preflight failed: opencode did not load the clone's opencode.json policy; not running")
-
-
-def changed_files(path: Path) -> list[str]:
-    out = sh("git", "status", "--porcelain", "--untracked-files=all", cwd=path)
-    files = [line[3:].split(" -> ")[-1] for line in out.splitlines() if line.strip()]
-    return [f for f in files if f not in LOCAL_FILES]
+    return 0 if result["passed"] else 1
 
 
 def check(name: str) -> int:
     meta, _ = load_spec(name)
-    path = wt(name)
-    if not path.exists():
-        raise SystemExit(f"no clone for {name}")
-    files = changed_files(path)
-    outside = [f for f in files if not any(fnmatch.fnmatch(f, g) for g in meta["files"])]
-    tests = subprocess.run([str(path / "run-tests")], cwd=path, capture_output=True, text=True)
-    last = (tests.stdout.strip().splitlines() or ["(no output)"])[-1]
-    print(f"changed: {files or 'nothing'}")
-    print(f"outside the allowed files: {outside or 'none'}")
-    print(f"tests: {'PASS' if tests.returncode == 0 else 'FAIL'} — {last}")
-    for denied in _denied_attempts(path):
-        print(f"denied by policy: {denied}")
-    result = json.loads((path / ".delegate-result.json").read_text()) if (path / ".delegate-result.json").exists() else {}
-    if result.get("escaped"):
-        print("ESCAPE: the main checkout changed during the run. Inspect `git status` there; nothing is merged.")
-    ok = bool(files) and not outside and tests.returncode == 0 and not result.get("escaped")
-    print("CHECK", "OK" if ok else "FAILED")
+    copy = copy_dir(name)
+    res = json.loads((copy / ".delegate" / "result.json").read_text())
+    ok, out = run_tests(copy, meta["tests"])
+    print(f"files: {res['files']}\nrefused (outside the spec): {res['refused'] or 'none'}")
+    print(f"rounds: {res['rounds']}, {res.get('minutes')} min")
+    print(f"tests (sandboxed): {'PASS' if ok else 'FAIL'} — {out.splitlines()[-1] if out else ''}")
+    for rel in res["files"]:
+        a, b = ROOT / rel, copy / rel
+        status = "new" if not a.exists() else ("unchanged" if a.read_text() == b.read_text() else "changed")
+        print(f"  {status:<9} {rel} ({len(b.read_text().splitlines())} lines)")
     return 0 if ok else 1
-
-
-def _denied_attempts(path: Path) -> list[str]:
-    log = path / ".delegate-log.jsonl"
-    if not log.exists():
-        return []
-    out = []
-    for line in log.read_text().splitlines():
-        if "denied" in line.lower() or "rejected" in line.lower():
-            out.append(line[:200])
-    return out[:10]
 
 
 def merge(name: str) -> int:
     if check(name):
-        raise SystemExit("check failed: not merging")
-    path = wt(name)
-    sh("git", "add", "-A", "--", *changed_files(path), cwd=path)
-    patch = sh("git", "diff", "--cached", "--binary", "HEAD", cwd=path)
-    p = subprocess.run(["git", "apply", "--3way", "-"], cwd=ROOT, input=patch, text=True, capture_output=True)
-    if p.returncode:
-        raise SystemExit(f"git apply failed:\n{p.stderr}")
-    print(f"applied {name} to {ROOT} (uncommitted): review with `git diff`, then commit")
+        raise SystemExit("tests fail in the copy: not merging")
+    copy = copy_dir(name)
+    meta, _ = load_spec(name)
+    res = json.loads((copy / ".delegate" / "result.json").read_text())
+    for rel in res["files"]:
+        if allowed(meta, rel):
+            (ROOT / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(copy / rel, ROOT / rel)
+    print(f"copied {res['files']} into {ROOT} (uncommitted): review, run the whole suite, then commit")
     return 0
 
 
 def drop(name: str) -> int:
-    path = wt(name)
-    if path.exists():
-        shutil.rmtree(path)
+    shutil.rmtree(copy_dir(name), ignore_errors=True)
     print(f"dropped {name}")
     return 0
 
@@ -215,9 +222,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["start", "check", "merge", "drop"])
     ap.add_argument("name")
-    ap.add_argument("--minutes", type=int, default=45)
+    ap.add_argument("--rounds", type=int, default=4)
     a = ap.parse_args(argv)
-    return {"start": lambda: start(a.name, a.minutes), "check": lambda: check(a.name),
+    return {"start": lambda: start(a.name, a.rounds), "check": lambda: check(a.name),
             "merge": lambda: merge(a.name), "drop": lambda: drop(a.name)}[a.cmd]()
 
 

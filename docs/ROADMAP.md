@@ -30,14 +30,14 @@ Building with two models saves tokens without lowering quality:
 - **Strata** (Qwen3.8 via opencode) builds packages that are **well specified, self-contained and checkable by tests**: adapters for documented APIs, fixtures, test files, and repetitive glue.
 - **Claude** builds the **architecture, security-sensitive code and anything hard to verify by tests**: the agent loop, resilience policy, Tor, approvals, browser control, the sandbox. Claude also reviews every delegated change.
 
-**Delegation harness** (`scripts/delegate.py`, package X1):
+**Delegation harness** (`scripts/delegate.py`, package X1). Strata **writes code; it never runs anything**:
 
-1. Creates an isolated standalone git clone (`../online-scout-delegate/<name>`) on a branch `delegate/<name>`. Not a worktree: opencode treats a worktree as the main repository and ignores its policy (found in the smoke test). opencode runs with `--standalone`; a preflight confirms it loaded the clone's policy, and any change to the main checkout during a run is flagged as an escape and blocks merging.
-2. Writes an `opencode.json` permission policy into it:
-   - **Allowed:** edit and read inside the worktree, and run `./run-tests`.
-   - **Denied:** every other shell command, web fetch and search, sub-tasks, and anything outside the worktree.
-3. Runs `opencode run --auto` with the spec. The spec includes a test command, and Strata iterates until the tests pass or its time budget runs out.
-4. Claude runs the tests again independently, reviews the diff, and merges or rejects. No delegated change lands unreviewed.
+1. The harness sends Strata the spec, the files it may change, and read-only context files. Strata replies with complete files in a fixed block format.
+2. Only files the spec allows (`files:` globs) are written, into a scratch copy of the tracked files (`../online-scout-delegate/<name>`). Nothing goes into the main checkout.
+3. The spec's tests run there under macOS `sandbox-exec`: no network except localhost, and no writes outside the copy and temp folders. Failures go back to Strata for another round, up to 4.
+4. Claude reviews the files, runs the whole suite, and merges. Nothing lands unreviewed.
+
+> **Why not an autonomous coding agent?** The first version ran opencode (an agentic coder, already set up for Strata) with `--auto` under a deny-by-default permission policy. A policy probe passed, but in the real smoke-test task the agent used absolute paths into the main checkout, wrote files there, and ran shell commands the policy should have denied, including `git stash` in the main checkout. No work was lost; the stash was restored within the run. Since the policy can't be relied on, the model gets no tools at all. Delegated code runs only in the sandbox, and only through the tests.
 
 The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U]** marks something only the user can do.
 

@@ -1,5 +1,7 @@
 ---
 files: ["scout/tools/papers_extra.py", "tests/test_papers_extra.py"]
+context: ["scout/tools/academic.py"]
+tests: ["tests/test_papers_extra.py"]
 ---
 # A1 + A2: Semantic Scholar and PubMed adapters
 
@@ -61,4 +63,4 @@ Cover at least:
   only ONE request made (count requests in the handler); a non-numeric pubdate → year None.
 - both: an HTTP 404 response raises httpx.HTTPStatusError.
 
-Run `./run-tests tests/test_papers_extra.py` until it passes, then `./run-tests` (the whole suite must pass).
+The harness runs `tests/test_papers_extra.py` and sends you any failures.
