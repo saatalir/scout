@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 
 import httpx
 
-SOURCES = ("arxiv", "openalex", "crossref")
+SOURCES = ("arxiv", "openalex", "crossref", "semantic_scholar", "pubmed")   # last two: scout/tools/papers_extra.py
 ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
 
@@ -150,4 +150,8 @@ def search_papers(client: httpx.Client, query: str, source: str = "openalex", *,
         return search_openalex(client, query, year_from=year_from, max_results=max_results, sort=sort)
     if source == "crossref":
         return search_crossref(client, query, year_from=year_from, max_results=max_results)
+    if source in ("semantic_scholar", "pubmed"):
+        from . import papers_extra                      # delegated module (A1/A2); imports Paper from here
+        fn = papers_extra.search_semantic_scholar if source == "semantic_scholar" else papers_extra.search_pubmed
+        return fn(client, query, year_from=year_from, max_results=max_results)
     raise ValueError(f"unknown source {source!r}; use one of {SOURCES}")

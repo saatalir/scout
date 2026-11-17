@@ -232,3 +232,34 @@ def test_state_survives_resume():
     rec, _ = run([[call("search_papers", query="hydrogen", source="crossref")]] + ["…"] * 3)
     loaded = TaskRecord.load(rec.id)
     assert loaded.state["calls"] and json.dumps(loaded.state)        # bookkeeping persisted in task.json
+
+
+def test_dataset_search_falls_back_to_zenodo_when_a_portal_fails():
+    def h(request):
+        if request.url.host == "data.gov.ie":
+            return httpx.Response(503)
+        if request.url.host == "zenodo.org":
+            return httpx.Response(200, json={"hits": {"hits": [{"id": 7, "doi": "10.5281/zenodo.7",
+                "links": {"self_html": "https://zenodo.org/records/7"}, "metadata": {"title": "Air quality data",
+                "publication_date": "2023-01-01"}, "files": [{"key": "aq.csv", "size": 900,
+                "links": {"self": "https://zenodo.org/api/records/7/files/aq.csv/content"}}]}]}})
+        return handler(request)
+    rec, _ = run([[call("search_datasets", query="air quality", source="ireland")], [call("finish", report="[done]")]],
+                 transport_handler=h)
+    s = rec.steps[0]
+    assert s.ok and '"source": "zenodo"' in s.summary and "ireland: HTTPStatusError" in s.summary
+
+
+def test_new_paper_sources_are_dispatched():
+    from scout.tools import academic
+    seen = []
+
+    def h(request):
+        seen.append(request.url.host)
+        if request.url.host == "api.semanticscholar.org":
+            return httpx.Response(200, json={"data": [{"title": "S2 paper", "year": 2024, "externalIds": {"DOI": "10.1/s2"}}]})
+        return httpx.Response(200, json={"esearchresult": {"idlist": []}})
+    with httpx.Client(transport=httpx.MockTransport(h)) as c:
+        assert academic.search_papers(c, "q", "semantic_scholar")[0].source == "semantic_scholar"
+        assert academic.search_papers(c, "q", "pubmed") == []
+    assert seen == ["api.semanticscholar.org", "eutils.ncbi.nlm.nih.gov"]

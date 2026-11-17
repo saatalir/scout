@@ -47,12 +47,21 @@ TOOLS = [
           {"query": {"type": "string", "description": "Search terms in English."},
            "source": {"type": "string", "enum": list(academic.SOURCES),
                       "description": "openalex: broad, citation counts; arxiv: preprints (use arxiv_id for a known paper); "
-                                     "crossref: DOIs and publisher metadata."},
+                                     "crossref: DOIs and publisher metadata; semantic_scholar: broad, open-access PDFs "
+                                     "(often rate-limited); pubmed: biomedicine only."},
            "year_from": {"type": "integer", "description": "Earliest publication year, inclusive."},
            "max_results": {"type": "integer", "description": "1-25 (default 8)."},
            "sort": {"type": "string", "enum": ["relevance", "cited"], "description": "openalex only."},
            "arxiv_id": {"type": "string", "description": "arxiv only: fetch this exact paper, e.g. 1706.03762."}},
           ["query", "source"]),
+    _tool("search_datasets",
+          "Tier 1. Find datasets (with downloadable files) in Zenodo or national open-data portals.",
+          {"query": {"type": "string"},
+           "source": {"type": "string", "enum": ["zenodo", "canada", "ireland", "switzerland"],
+                      "description": "zenodo: research datasets worldwide (default); the others: government open data."},
+           "year_from": {"type": "integer", "description": "zenodo only."},
+           "max_results": {"type": "integer", "description": "1-20 (default 8)."}},
+          ["query"]),
     _tool("web_search",
           "Tier 2. Search the web through a real browser (DuckDuckGo, Brave Search, Google). Use to find pages the "
           "academic APIs do not cover: official pages, reports, datasets.",
@@ -78,7 +87,8 @@ TOOLS = [
            "source_url": {"type": "string"},
            "authors": {"type": "array", "items": {"type": "string"}},
            "year": {"type": "integer"}, "doi": {"type": "string"}, "arxiv": {"type": "string"},
-           "source": {"type": "string", "enum": ["arxiv", "openalex", "crossref", "web"]},
+           "source": {"type": "string", "enum": ["arxiv", "openalex", "crossref", "semantic_scholar", "pubmed",
+                                                 "zenodo", "ckan", "web"]},
            "licence": {"type": "string"},
            "cited_by": {"type": "integer"},
            "download_path": {"type": "string", "description": "The path download_file returned, if any."},
@@ -155,7 +165,7 @@ def _short(obj: Any, limit: int = TOOL_RESULT_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + f"… [cut: {len(text) - limit} more characters]"
 
 
-PAPER_FALLBACK = ("openalex", "crossref", "arxiv")
+PAPER_FALLBACK = ("openalex", "crossref", "semantic_scholar", "arxiv")   # pubmed only when asked: biomedicine
 TASK_MINUTES = 45                  # wall-clock budget per task (R3)
 TOOL_SECONDS = 240                 # one tool call may not block the loop longer than this
 STUCK_WINDOW = 10                  # steps without new library items before a reflection
@@ -259,6 +269,36 @@ class Scout:
             res["fallback"] = ("Tried before this: " + "; ".join(tried)) if out else ("All sources failed or were empty: " + "; ".join(tried))
             if not out:
                 res["error"] = "no results from any source"
+        return res
+
+    def _search_datasets(self, client: httpx.Client, a: dict) -> Any:
+        from .tools.datasets import search_datasets
+        wanted = a.get("source") or "zenodo"
+        order = [wanted] + (["zenodo"] if wanted != "zenodo" else [])     # R2: a portal failing -> Zenodo
+        tried, found, used = [], [], wanted
+        for src in order:
+            try:
+                found = search_datasets(client, a["query"], src, year_from=a.get("year_from"),
+                                        max_results=max(1, min(int(a.get("max_results") or 8), 20)))
+            except Exception as e:  # noqa: BLE001
+                tried.append(f"{src}: {type(e).__name__}: {str(e)[:120]}")
+                continue
+            used = src
+            if found:
+                break
+            tried.append(f"{src}: no results")
+        out = []
+        for d in found:
+            item = d.to_dict()
+            item["files"] = item.get("files", [])[:8]
+            if find_existing(doi=d.doi, url=d.url):
+                item["already_in_library"] = True
+            out.append(item)
+        res: dict[str, Any] = {"source": used, "count": len(out), "results": out}
+        if tried:
+            res["fallback"] = "; ".join(tried)
+            if not out:
+                res["error"] = "no datasets from any source"
         return res
 
     def _web_search(self, a: dict) -> Any:
@@ -372,6 +412,8 @@ class Scout:
     def call(self, client: httpx.Client, name: str, a: dict) -> Any:
         if name == "search_papers":
             return self._search_papers(client, a)
+        if name == "search_datasets":
+            return self._search_datasets(client, a)
         if name == "web_search":
             return self._web_search(a)
         if name == "fetch_page":
