@@ -14,13 +14,14 @@ import socket
 import subprocess
 import time
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Callable, Iterator
 from urllib.parse import urlparse
 
 import httpx
 
 from .browser.config import load_browser_config
 from .browser.hosts import SSH_OPTS, free_port
+from .resilience import RetryPolicy, RetryTransport
 
 USER_AGENT = "OnlineScout/0.1 (research agent; +https://github.com/saatalir/scout)"
 TIMEOUT = httpx.Timeout(30.0, connect=15.0)
@@ -73,14 +74,23 @@ def tor_proxy_url() -> Iterator[str]:
             proc.kill()
 
 
+def _client(proxy: str | None, timeout: httpx.Timeout, on_retry: Callable[[str], None] | None,
+            policy: RetryPolicy | None) -> httpx.Client:
+    # Every request goes through RetryTransport (R1): backoff, Retry-After, per-host circuit breaker.
+    inner = httpx.HTTPTransport(proxy=proxy, retries=0) if proxy else httpx.HTTPTransport(retries=0)
+    return httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=timeout, follow_redirects=True,
+                        transport=RetryTransport(inner, policy, on_retry=on_retry))
+
+
 @contextmanager
-def http_client(tor: bool) -> Iterator[httpx.Client]:
-    headers = {"User-Agent": USER_AGENT}
+def http_client(tor: bool, *, on_retry: Callable[[str], None] | None = None,
+                policy: RetryPolicy | None = None) -> Iterator[httpx.Client]:
     if not tor:
-        with httpx.Client(headers=headers, timeout=TIMEOUT, follow_redirects=True) as c:
+        with _client(None, TIMEOUT, on_retry, policy) as c:
             yield c
         return
     with tor_proxy_url() as proxy:
-        with httpx.Client(headers=headers, timeout=httpx.Timeout(60.0, connect=30.0),
-                          follow_redirects=True, proxy=proxy) as c:
+        # Tor circuits are slower and fail more often: longer timeouts, a little more patience.
+        with _client(proxy, httpx.Timeout(60.0, connect=30.0), on_retry,
+                     policy or RetryPolicy(attempts=5, max_elapsed=180.0)) as c:
             yield c
