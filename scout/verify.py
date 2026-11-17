@@ -22,18 +22,24 @@ from .tools.web import pdf_text
 
 SOURCE_CHARS = 3500          # text per source handed to the checker
 MAX_SOURCES = 12
+META_FIELDS = ("authors", "year", "doi", "arxiv", "source_url", "licence", "cited_by", "kind")
 
 PROMPT = """You check a research report against the sources it was written from.
 
-List every factual claim in the REPORT (statements about findings, numbers, dates, what a source says).
-Ignore the checklist lines, statements about what the agent did or saved, and identifiers on their own.
+List the factual claims in the REPORT about content: findings, numbers, conclusions, what a source says.
+Skip: checklist lines; what the agent did or saved; bibliographic details (titles, authors, years, venues,
+DOIs, arXiv ids, citation counts, licences: they were copied from the catalogues). At most 20 claims; merge
+claims that say the same thing.
 For each claim, decide using ONLY the SOURCES below:
 - "supported": a source states it,
 - "partial": a source states part of it, or something close but not the same,
 - "unsupported": no source states it.
 
-Reply with JSON only, no other text:
-{"claims": [{"claim": "...", "source": "S1", "verdict": "supported|partial|unsupported", "evidence": "short quote or empty"}]}
+Reply with compact JSON only (one claim per line, evidence at most 12 words), no other text:
+{"claims": [
+{"claim": "...", "source": "S1", "verdict": "supported|partial|unsupported", "evidence": "short quote or empty"}
+]}
+If the report makes no such claims, reply {"claims": []}.
 
 REPORT:
 <<<
@@ -70,7 +76,9 @@ def gather_sources(files: list[str]) -> list[dict]:
             continue
         meta = read_front_matter(md)
         body = md.read_text().split("\n---\n", 1)[-1]
-        text = body
+        facts = "; ".join(f"{k}: {', '.join(map(str, v)) if isinstance(v, list) else v}"
+                          for k in META_FIELDS if (v := meta.get(k)) not in (None, "", []))
+        text = (f"[catalogue record] {facts}\n" if facts else "") + body
         if meta.get("file", "").lower().endswith(".pdf") and (md.parent / meta["file"]).exists():
             text += "\n" + pdf_text(md.parent / meta["file"], pages=3)
         out.append({"id": f"S{len(out) + 1}", "title": meta.get("title", md.stem),
@@ -85,6 +93,26 @@ def _parse_json(text: str) -> Any:
     return json.loads(m.group(0) if m else text)
 
 
+CLAIM_OBJ = re.compile(r'\{\s*"claim"\s*:.*?"verdict"\s*:\s*"[a-z]+".*?\}', re.S)
+
+
+def _parse_claims(text: str) -> list[dict]:
+    """The claims list; if the JSON is cut off (length limit) or malformed, keep every complete claim object."""
+    try:
+        return list(_parse_json(text).get("claims") or [])
+    except (ValueError, AttributeError):
+        pass
+    out = []
+    for m in CLAIM_OBJ.finditer(text or ""):
+        try:
+            out.append(json.loads(m.group(0)))
+        except ValueError:
+            continue
+    if not out:
+        raise ValueError("no claims could be read from the checker's answer")
+    return out
+
+
 def verify_report(llm, report: str, files: list[str]) -> Verification:
     sources = gather_sources(files)
     if not sources or not report.strip():
@@ -92,8 +120,8 @@ def verify_report(llm, report: str, files: list[str]) -> Verification:
     src_text = "\n\n".join(f"[{s['id']}] {s['title']} ({s['ref']})\n{s['text']}" for s in sources)
     try:
         r = llm.chat("extractor", [{"role": "user", "content": PROMPT % (report[:6000], src_text)}],
-                     max_tokens=4096, temperature=0.0)
-        claims = _parse_json(r.text).get("claims") or []
+                     max_tokens=8192, temperature=0.0)
+        claims = _parse_claims(r.text)
     except Exception as e:  # noqa: BLE001 - verification must never block finishing
         return Verification(error=f"{type(e).__name__}")
     v = Verification(checked=len(claims))

@@ -186,6 +186,7 @@ tasks:
       and save it to the library with its metadata.
     tor: false
     needs: [api, web]
+    fresh_library: true        # r01 saves the same PDF earlier in the run; this task must find it itself
     checks:
       verified_files: {n: 1, kind: pdf}
       pdf_title_matches: "Attention Is All You Need"

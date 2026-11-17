@@ -227,10 +227,37 @@ def _landing_pdf_links(html: str, base: str) -> list[str]:
     return links[:5]
 
 
+def _lookup_title(client: httpx.Client, title: str) -> tuple[str | None, str | None, str | None]:
+    """(doi, arxiv id, open-access pdf url) of the work with this title, from OpenAlex; best effort."""
+    q = re.sub(r"[,:|]", " ", title).strip()
+    r = client.get("https://api.openalex.org/works", params={"filter": f"title.search:{q}", "per-page": 5})
+    if r.status_code != 200:
+        return None, None, None
+    for w in r.json().get("results", []):
+        if not title_in_text(title, w.get("title") or "", 0.9) or not title_in_text(w.get("title") or "", title, 0.9):
+            continue
+        doi = (w.get("doi") or "").removeprefix("https://doi.org/") or None
+        arxiv = None
+        for l in w.get("locations") or []:
+            m = re.search(r"arxiv\.org/(?:abs|pdf)/([\w.\-/]+?)(?:v\d+)?(?:\.pdf)?$", l.get("landing_page_url") or "")
+            if m:
+                arxiv = m.group(1)
+                break
+        return doi, arxiv, (w.get("best_oa_location") or {}).get("pdf_url")
+    return None, None, None
+
+
 def pdf_candidates(client: httpx.Client, failed_url: str, *, doi: str | None = None, arxiv: str | None = None,
-                   landing_url: str | None = None) -> list[str]:
-    """Other places the same PDF may be, most reliable first. Each lookup is best effort."""
+                   landing_url: str | None = None, title: str | None = None) -> list[str]:
+    """Other places the same PDF may be, most reliable first. Each lookup is best effort.
+    With neither DOI nor arXiv id, the expected title is looked up in OpenAlex to find them."""
     cands: list[str] = []
+    if title and not (doi or arxiv):
+        try:
+            doi, arxiv, oa = _lookup_title(client, title)
+            cands += [oa] if oa else []
+        except Exception:  # noqa: BLE001
+            pass
     if arxiv:
         cands.append(f"https://arxiv.org/pdf/{re.sub(r'v\\d+$', '', arxiv.strip())}")
     if doi:

@@ -124,7 +124,6 @@ def run_one(task: dict, llm) -> Outcome:
     from scout.task import TaskRecord
 
     o = Outcome(task_id=task["id"], phase=task["phase"])
-    files_before = sum(1 for e in _read_index(library_dir()) if e.get("file"))
     approvals: list[tuple[int, str]] = []
     rec = TaskRecord.create(task["objective"], tor=bool(task.get("tor")))
 
@@ -133,8 +132,13 @@ def run_one(task: dict, llm) -> Outcome:
         return True
 
     budget = max(40, (task.get("checks") or {}).get("max_steps", 0) + 10)
-    saved_env = {k: os.environ.get(k) for k in task.get("env", {})}
-    os.environ.update({k: str(v) for k, v in task.get("env", {}).items()})
+    env = {k: str(v) for k, v in (task.get("env") or {}).items()}
+    if task.get("fresh_library"):
+        # a task that must fetch an item itself, even if an earlier task in the run already saved it
+        env["SCOUT_LIBRARY_DIR"] = str(library_dir().with_name(f"library-{task['id']}"))
+    saved_env = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    files_before = sum(1 for e in _read_index(library_dir()) if e.get("file"))
     t0 = time.perf_counter()
     try:
         if task.get("interrupt_after"):
@@ -156,16 +160,17 @@ def run_one(task: dict, llm) -> Outcome:
         rec = Scout(rec, llm=llm, ask_approval=approve, max_steps=budget).run()
     except Exception as e:  # noqa: BLE001
         o.error = f"{type(e).__name__}: {e}"
-    finally:
+    o.seconds = round(time.perf_counter() - t0, 1)
+    try:
+        files_after = sum(1 for e in _read_index(library_dir()) if e.get("file"))
+        o.status, o.steps, o.report, o.record = rec.status, len(rec.steps), rec.report, str(rec.dir)
+        o.checks = evaluate(task, rec, items_for_task(rec.id), files_before, files_after, approvals)
+    finally:                                   # the task's env (and library) stay in place for its checks
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-    o.seconds = round(time.perf_counter() - t0, 1)
-    files_after = sum(1 for e in _read_index(library_dir()) if e.get("file"))
-    o.status, o.steps, o.report, o.record = rec.status, len(rec.steps), rec.report, str(rec.dir)
-    o.checks = evaluate(task, rec, items_for_task(rec.id), files_before, files_after, approvals)
     o.passed = o.error is None and all(o.checks.values())
     return o
 

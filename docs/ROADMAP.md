@@ -58,10 +58,10 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 | A2 | PubMed adapter (E-utilities esearch + esummary, no key) | **S** | R-core | Fixture tests and one live call | **Done** (Strata, 1 round); live OK |
 | A3 | Zenodo adapter (records API: datasets and papers with file links) | **S** | R-core | Fixture tests and one live call | **Done** (Strata, 3 rounds, tests unchanged); live OK |
 | A4 | Open-data portals: CKAN `package_search` (several government portals); Eurostat later | **S** | R-core | Fixture tests and one live call | **Done** (Strata). Live checks led Claude to swap data.gov (no longer CKAN) for Canada and fix opendata.swiss's multilingual fields |
-| SA | Parallel research sub-agents: a `research_subtasks` tool, about 2 concurrent (Strata answers ~2 requests in parallel), each with its own budget, returning summaries and item paths; failures retried or reported | C | R-loop | Tests with a fake model; r02 faster than the 479 s baseline | **Built** (tests pass; live timing in G1) |
-| VF | Research verification: every claim in the report checked against stored source text (extractor role); unsupported claims fixed or flagged | C | R-loop | Tests: an unsupported claim is caught; eval checks on the report | **Built** (tests pass) |
+| SA | Parallel research sub-agents: a `research_subtasks` tool, about 2 concurrent (Strata answers ~2 requests in parallel), each with its own budget, returning summaries and item paths; failures retried or reported | C | R-loop | Tests with a fake model; r02 faster than the 479 s baseline | **Built** (tests pass; the model chose not to split r02 in live runs) |
+| VF | Research verification: every claim in the report checked against stored source text (extractor role); unsupported claims fixed or flagged | C | R-loop | Tests: an unsupported claim is caught; eval checks on the report | **Done** (works live after the 2026-11-17 fixes; costs 1.5–4.5 min per task, to reduce) |
 | LIB | Point `SCOUT_LIBRARY_DIR` at the real knowledge-library inbox; confirm the front-matter fields its ingestion needs | **U** + C | — | One real item ingested by the library | |
-| G1 | Phase 1 gate: all phase-1 tasks, 3 repeats, plus new resilience tasks (r11–r13 below) | C | all above | Pass rate ≥ threshold (set from baselines) | |
+| G1 | Phase 1 gate: all phase-1 tasks, 3 repeats, plus new resilience tasks (r11–r13 below) | C | all above | Pass rate ≥ threshold (set from baselines) | **In progress:** first full run 10/15; all five failures fixed and passing in a rerun (PHASE1 §6). Next: a full run, then 3 repeats |
 
 **New resilience eval tasks** (added, not changing existing ones; **in `tasks.yaml`**):
 

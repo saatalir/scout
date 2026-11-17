@@ -131,16 +131,42 @@ def save_item(item: Item, *, task_id: str, body: str = "", file: Path | None = N
         return _save_item(item, task_id=task_id, body=body, file=file)
 
 
+def _attach_file(lib: Path, entry: dict, file: Path, digest: str) -> Path:
+    """Give a metadata-only item its verified file (the paper was saved first, its PDF found later)."""
+    md = lib / entry["path"]
+    stored = md.parent / file.name
+    shutil.copy2(file, stored)
+    meta = read_front_matter(md)
+    body = md.read_text().split("\n---\n", 1)[-1]
+    meta.update({"file": stored.name, "sha256": digest,
+                 "route": meta.get("route") or route_for(meta.get("source_url"), stored.name)})
+    md.write_text("---\n" + yaml.safe_dump(meta, allow_unicode=True, sort_keys=False) + "---\n" + body)
+    entries = _read_index(lib)
+    for e in entries:
+        if e.get("path") == entry["path"]:
+            e.update({"sha256": digest, "file": stored.name})
+    tmp = lib / (INDEX + ".tmp")
+    tmp.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries))
+    os.replace(tmp, lib / INDEX)
+    return md
+
+
 def _save_item(item: Item, *, task_id: str, body: str = "", file: Path | None = None) -> tuple[Path, bool]:
     """Write one item to the inbox. Returns (path to its .md, created).
 
-    If the library already holds the same DOI, arXiv id, URL or file, nothing is
-    written and the existing item's path is returned with created=False.
+    If the library already holds the same DOI, arXiv id, URL or file, nothing new is
+    written and the existing item's path is returned with created=False. One
+    exception: a file for an item saved earlier without one is attached to it
+    (created=False; the item's index entry then has the file).
     """
     lib = library_dir()
     digest = sha256_file(file) if file else None
-    existing = find_existing(doi=item.doi, arxiv=item.arxiv, url=item.source_url, sha256=digest)
+    if digest and (same := find_existing(sha256=digest)):
+        return lib / same["path"], False
+    existing = find_existing(doi=item.doi, arxiv=item.arxiv, url=item.source_url)
     if existing:
+        if file and digest and not existing.get("file"):
+            return _attach_file(lib, existing, file, digest), False
         return lib / existing["path"], False
 
     item_id = f"{time.strftime('%Y%m%d')}-{_slug(item.title)}"

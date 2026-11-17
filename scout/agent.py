@@ -20,7 +20,7 @@ from typing import Any, Callable
 import httpx
 
 from .approvals import ApprovalPolicy
-from .library import Item, find_existing, save_item
+from .library import Item, find_existing, read_front_matter, save_item
 from .llm import LLM
 from .net import http_client
 from .resilience import DeadlineExceeded, Deadline, RetryPolicy, is_transient, run_with_time_limit
@@ -32,6 +32,10 @@ TOOL_RESULT_CHARS = 7000
 
 AskApproval = Callable[[str], bool]          # action summary -> approved?
 Notify = Callable[[str], None]
+
+
+DONE_NOTE = ("Already in the library (saved earlier, possibly by another task): this part of the objective is "
+             "done. Do not download, save or open it again; report it as already in the library.")
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -124,7 +128,11 @@ How to work
 - Save every item the objective asks for with save_to_library, with full metadata (title, authors, year, doi or
   arxiv id, source_url, source) and short notes (abstract or summary). Pass download_path when you downloaded a file.
 - Check results: a download counts only if verified is true; if not, try another URL or report the failure.
-  If a tool says an item is already in the library, do not fetch it again; say "already in the library" in the report.
+  If a tool says an item is already in the library, that part is done: do not fetch, save or open it again; say
+  "already in the library" in the report. If you saved a paper first and download its PDF later, call
+  save_to_library again with the download_path: the file is attached to the saved item.
+- For a dataset, download the archive its own page offers (the dataset page's Download link, often a .zip) rather
+  than single files, unless the objective names a file.
 - Be efficient: decide what the objective needs, get it, save it, finish. Metadata from search_papers is enough to
   save a paper: do not fetch its page or web-search it again to "confirm". Fetch a page only when the objective needs
   its content. Two or three searches are usually enough; refine the query instead of repeating similar ones.
@@ -320,7 +328,8 @@ class Scout:
     def _download(self, client: httpx.Client, a: dict) -> Any:
         existing = find_existing(url=a["url"])
         if existing:
-            return {"already_in_library": True, "item": existing["path"], "title": existing.get("title")}
+            return {"already_in_library": True, "item": existing["path"], "title": existing.get("title"),
+                    "has_file": bool(existing.get("file")), "note": DONE_NOTE}
         tried: list[dict] = []
         urls = [a["url"]]
         d = None
@@ -343,7 +352,8 @@ class Scout:
                     a.get("doi") or a.get("arxiv") or url.lower().split("?")[0].endswith(".pdf")
                     or a.get("expected_kind") == "pdf")
                 if pdfish:
-                    urls += web.pdf_candidates(client, url, doi=a.get("doi"), arxiv=a.get("arxiv"))
+                    urls += web.pdf_candidates(client, url, doi=a.get("doi"), arxiv=a.get("arxiv"),
+                                               title=a.get("expected_title"))
             i += 1
         if d is None or not d.verified:
             return {"verified": False, "error": "no verified download from any location", "tried": tried}
@@ -351,7 +361,8 @@ class Scout:
             dup = find_existing(sha256=d.sha256)
             if dup:
                 Path(d.path).unlink(missing_ok=True)
-                return {"already_in_library": True, "item": dup["path"], "title": dup.get("title")}
+                return {"already_in_library": True, "item": dup["path"], "title": dup.get("title"),
+                        "has_file": True, "note": DONE_NOTE}
         self.downloads[d.path] = d
         out = d.for_model()
         if tried:
@@ -373,10 +384,19 @@ class Scout:
         item = Item(title=a["title"].strip(), source_url=a.get("source_url"), authors=a.get("authors") or [],
                     year=a.get("year"), doi=a.get("doi"), arxiv=a.get("arxiv"), kind=a.get("kind", "other"),
                     source=a.get("source") or "web", licence=a.get("licence"), extra=extra)
+        dup_file = file is not None and find_existing(sha256=self.downloads[dp].sha256) is not None
         md, created = save_item(item, task_id=self.save_task_id, body=a.get("notes") or "", file=file)
         if created:
             self.rec.files.append(str(md))
-        return {"saved": created, "already_in_library": not created, "item": md.name}
+            return {"saved": True, "item": md.name}
+        meta = read_front_matter(md)
+        if file is not None and not dup_file and meta.get("sha256") == self.downloads[dp].sha256:
+            if str(md) not in self.rec.files:
+                self.rec.files.append(str(md))
+            return {"saved": True, "file_attached": True, "item": md.name,
+                    "note": "This item was already saved without a file; the verified file is now attached to it."}
+        return {"saved": False, "already_in_library": True, "item": md.name, "has_file": bool(meta.get("file")),
+                "note": DONE_NOTE}
 
     @property
     def browser(self) -> BrowserRunner:
@@ -537,14 +557,55 @@ class Scout:
             rec.report = (report or r.text or "").strip() or why
         except Exception as e:  # noqa: BLE001
             rec.report = f"{why} (No report: {type(e).__name__}.)"
+        rec.report += self._record_line()
         rec.status = "partial" if rec.files else "failed"
 
+    def _record_line(self) -> str:
+        """R7: what the task record shows was saved, appended to every report so a wrong claim is visible.
+        Sub-agents (saving for a parent task) get none: their parent counts their items."""
+        if self.save_task_id != self.rec.id:
+            return ""
+        with_file = 0
+        for f in self.rec.files:
+            try:
+                with_file += bool(read_front_matter(Path(f)).get("file"))
+            except OSError:
+                pass
+        n = len(self.rec.files)
+        return (f"\n\n_Task record: {n} item{'s' if n != 1 else ''} saved to the library by this task, "
+                f"{with_file} with a verified file._")
+
     # -- loop ------------------------------------------------------------------------------------------
+    def _repair_transcript(self) -> None:
+        """R5: after a crash, the last turn's tool calls may lack results. Give each one the logged result if
+        it ran, or say plainly that it did not run, so the model neither repeats done work nor believes
+        undone work happened."""
+        msgs = self.rec.messages
+        last = next((i for i in range(len(msgs) - 1, -1, -1) if msgs[i].get("role") == "assistant"), None)
+        if last is None or not msgs[last].get("tool_calls"):
+            return
+        answered = {m.get("tool_call_id") for m in msgs[last + 1:] if m.get("role") == "tool"}
+        by_call = {s.call_id: s for s in self.rec.steps if s.call_id}
+        repaired = []
+        for tc in msgs[last]["tool_calls"]:
+            cid = tc.get("id")
+            if cid in answered:
+                continue
+            step = by_call.get(cid)
+            content = (f"(recovered after an interruption) {step.summary}" if step else
+                       "NOT RUN: the task was interrupted before this call ran. Call it again if it is still needed.")
+            repaired.append({"role": "tool", "tool_call_id": cid, "content": content})
+        if repaired:
+            # tool results must follow their assistant turn directly, before any later message
+            msgs[last + 1:last + 1] = repaired
+            self.notify(f"resumed: {len(repaired)} interrupted tool call(s) repaired in the transcript")
+
     def run(self) -> TaskRecord:
         rec = self.rec
         if not rec.messages:
             rec.messages = [{"role": "system", "content": SYSTEM},
                             {"role": "user", "content": rec.objective}]
+        self._repair_transcript()
         rec.status = "running"
         rec.save()
         idle = 0
@@ -633,7 +694,7 @@ class Scout:
                         self.notify(f"verification: {len(v.unsupported)} unsupported claims sent back")
                         continue
                     report = f"{report}\n\n{v.note()}"
-                rec.report = report
+                rec.report = report + self._record_line()
                 rec.status = "done"
                 rec.log("finish", {}, True, rec.report[:200])
                 rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": "ok"})
@@ -652,7 +713,7 @@ class Scout:
             if st["calls"][sig] > 2 and name != "request_approval":     # R4: refuse a third identical call
                 result, ok = {"error": f"You already made this exact {name} call {st['calls'][sig] - 1} times; "
                                        "its result is above. Change the arguments or use another tool."}, False
-                step = rec.log(name, args, ok, _short(result, 500))
+                step = rec.log(name, args, ok, _short(result, 500), call_id=c.id)
             else:
                 t0 = time.perf_counter()
                 try:
@@ -663,7 +724,7 @@ class Scout:
                     result, ok = {"error": f"{e}; try a lighter step or another source"}, False
                 except Exception as e:  # noqa: BLE001 - a failing tool is reported to the model
                     result, ok = {"error": f"{type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}"}, False
-                step = rec.log(name, args, ok, _short(result, 500), time.perf_counter() - t0)
+                step = rec.log(name, args, ok, _short(result, 500), time.perf_counter() - t0, call_id=c.id)
             self.notify(f"[{step.n}] {name} {'ok' if ok else 'FAILED'} ({step.seconds:.1f}s)")
             rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": _short(result)})
             self._after_step(name, ok, result)

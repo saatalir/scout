@@ -45,6 +45,7 @@ class Step:
     summary: str                   # what the tool returned, shortened
     seconds: float = 0.0
     at: float = field(default_factory=time.time)
+    call_id: str | None = None     # the model's tool-call id: lets a resumed task tell which calls ran (R5)
 
 
 @dataclass
@@ -82,8 +83,10 @@ class TaskRecord:
         rec.save()
         return rec
 
-    def log(self, tool: str, args: dict, ok: bool, summary: str, seconds: float = 0.0) -> Step:
-        step = Step(n=len(self.steps) + 1, tool=tool, args=args, ok=ok, summary=summary[:500], seconds=round(seconds, 2))
+    def log(self, tool: str, args: dict, ok: bool, summary: str, seconds: float = 0.0,
+            call_id: str | None = None) -> Step:
+        step = Step(n=len(self.steps) + 1, tool=tool, args=args, ok=ok, summary=summary[:500],
+                    seconds=round(seconds, 2), call_id=call_id)
         self.steps.append(step)
         if not ok:
             self.failures.append(f"{tool}({json.dumps(args, ensure_ascii=False)[:200]}): {summary[:200]}")
