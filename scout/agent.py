@@ -83,6 +83,12 @@ TOOLS = [
            "download_path": {"type": "string", "description": "The path download_file returned, if any."},
            "notes": {"type": "string", "description": "Markdown: abstract, summary or the page text to keep."}},
           ["title", "kind"]),
+    _tool("research_subtasks",
+          "Work on independent parts of a broad objective in parallel. Each part gets its own research agent that "
+          "searches, saves items to the library and returns a summary. Use for objectives with several sub-topics "
+          "or many items; not for a single paper or page.",
+          {"subtasks": {"type": "array", "minItems": 2, "maxItems": 6,
+                        "items": {"type": "string", "description": "One self-contained research question."}}}),
     _tool("request_approval",
           "Ask the human to approve an irreversible action (submit, pay, send, accept terms). Returns approved/denied.",
           {"action_summary": {"type": "string"}}),
@@ -108,6 +114,8 @@ How to work
   save a paper: do not fetch its page or web-search it again to "confirm". Fetch a page only when the objective needs
   its content. Two or three searches are usually enough; refine the query instead of repeating similar ones.
   Stop as soon as the objective is met.
+- For a broad objective with independent parts (several sub-topics, or many items to collect), split it with
+  research_subtasks: up to 6 parts, worked on in parallel, each returning a summary and saved items.
 - Try hard. When a step fails, do not give up: use the alternatives — another source (openalex, crossref,
   arxiv), another URL (the paper's DOI or landing page, arXiv), web_search, a broader or simpler query.
   Network errors were already retried for you; read the error and change something before trying again.
@@ -144,6 +152,9 @@ TOOL_SECONDS = 240                 # one tool call may not block the loop longer
 STUCK_WINDOW = 10                  # steps without new library items before a reflection
 FAIL_STREAK = 3                    # consecutive failed steps before a reflection
 MODEL_OUTAGE_MINUTES = 10          # keep retrying an unreachable model this long, then pause as "waiting"
+SUB_PARALLEL = 2                   # Strata answers about two requests at once (measured)
+SUB_STEPS, SUB_MINUTES = 15, 15    # budget per research sub-agent
+SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human")   # sub-agents report, never hand off
 
 
 class ModelUnavailable(RuntimeError):
@@ -177,7 +188,8 @@ class Scout:
                  client_factory: Callable[..., Any] = http_client,
                  web_search_fn: Callable[..., Any] | None = None,
                  task_minutes: float | None = TASK_MINUTES, tool_seconds: float | None = TOOL_SECONDS,
-                 model_policy: RetryPolicy | None = None):
+                 model_policy: RetryPolicy | None = None, tools: list[dict] | None = None,
+                 save_task_id: str | None = None):
         if record.tor is None:
             raise ValueError("record.tor must be decided (ask the user) before the task runs")
         self.rec = record
@@ -192,6 +204,9 @@ class Scout:
         self.model_policy = model_policy or RetryPolicy(attempts=12, base=5, cap=90,
                                                         max_elapsed=MODEL_OUTAGE_MINUTES * 60)
         self.downloads: dict[str, web.Download] = {}
+        self._files_lock = __import__("threading").Lock()
+        self.tools = tools or TOOLS
+        self.save_task_id = save_task_id or record.id        # sub-agents file items under the parent task
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
         st.setdefault("fail_streak", 0)
@@ -301,7 +316,7 @@ class Scout:
         item = Item(title=a["title"].strip(), source_url=a.get("source_url"), authors=a.get("authors") or [],
                     year=a.get("year"), doi=a.get("doi"), arxiv=a.get("arxiv"), kind=a.get("kind", "other"),
                     source=a.get("source") or "web", licence=a.get("licence"), extra=extra)
-        md, created = save_item(item, task_id=self.rec.id, body=a.get("notes") or "", file=file)
+        md, created = save_item(item, task_id=self.save_task_id, body=a.get("notes") or "", file=file)
         if created:
             self.rec.files.append(str(md))
         return {"saved": created, "already_in_library": not created, "item": md.name}
@@ -327,7 +342,50 @@ class Scout:
             return self._save(a)
         if name == "request_approval":
             return self._approval(a)
+        if name == "research_subtasks":
+            return self._subtasks(a)
         raise ValueError(f"unknown tool {name!r}; tools: {', '.join(TOOL_NAMES)}")
+
+    def _run_sub(self, n: int, question: str) -> dict:
+        """One research sub-agent: own record and budget, same model, Tor choice and library task id."""
+        objective = (f"{question}\n\nThis is one part of a larger task: \"{self.rec.objective}\". Save every "
+                     "relevant item to the library with full metadata. Finish with a short summary that lists what you "
+                     "saved (identifiers) and anything you could not do.")
+        sub_tools = [t for t in self.tools if t["function"]["name"] not in SUB_EXCLUDED]
+        attempt_note = ""
+        for attempt in (1, 2):                    # R1 at the agent level: one retry for a sub-agent that got nowhere
+            child = TaskRecord.create(objective + attempt_note, tor=self.rec.tor)
+            child.state["parent"] = self.rec.id
+            sub = Scout(child, llm=self.llm, notify=lambda m: self.notify(f"  [sub {n}] {m}"),
+                        max_steps=SUB_STEPS, client_factory=self.client_factory, web_search_fn=self.web_search_fn,
+                        task_minutes=SUB_MINUTES, tool_seconds=self.tool_seconds, model_policy=self.model_policy,
+                        tools=sub_tools, save_task_id=self.save_task_id)
+            try:
+                child = sub.run()
+            except Exception as e:  # noqa: BLE001
+                child.status, child.report = "failed", f"{type(e).__name__}: {e}"
+                child.save()
+            if child.status != "failed" or child.files or attempt == 2:
+                break
+            attempt_note = f"\n\nA first attempt failed: {child.report[:300]}. Use a different approach."
+        with self._files_lock:
+            self.rec.files.extend(f for f in child.files if f not in self.rec.files)
+        return {"part": n, "question": question, "status": child.status, "saved": len(child.files),
+                "summary": child.report[:1500], "steps": len(child.steps), "task_id": child.id}
+
+    def _subtasks(self, a: dict) -> Any:
+        from concurrent.futures import ThreadPoolExecutor
+        questions = [q.strip() for q in a.get("subtasks") or [] if isinstance(q, str) and q.strip()][:6]
+        if len(questions) < 2:
+            return {"error": "research_subtasks needs at least two independent questions"}
+        self.notify(f"research_subtasks: {len(questions)} parts, {SUB_PARALLEL} at a time")
+        with ThreadPoolExecutor(max_workers=SUB_PARALLEL, thread_name_prefix="scout-sub") as ex:
+            results = list(ex.map(lambda nq: self._run_sub(nq[0] + 1, nq[1]), enumerate(questions)))
+        self.rec.save()
+        out = {"parts": results, "saved_total": sum(r["saved"] for r in results)}
+        if all(r["status"] == "failed" for r in results):
+            out["error"] = "every part failed; see the summaries"
+        return out
 
     # -- model -------------------------------------------------------------------------------
     def _model_turn(self, tools: list[dict] | None = None, tool_choice: Any = None) -> Any:
@@ -337,7 +395,7 @@ class Scout:
         for _ in range(3):
             try:
                 r = self.model_policy.call(
-                    self.llm.chat, "planner", self.rec.messages, tools=tools if tools is not None else TOOLS,
+                    self.llm.chat, "planner", self.rec.messages, tools=tools if tools is not None else self.tools,
                     max_tokens=budget, **({"tool_choice": tool_choice} if tool_choice else {}),
                     on_retry=lambda n, e, w: self.notify(f"model unreachable ({type(e).__name__}); retry {n} in {w:.0f}s"))
             except Exception as e:  # noqa: BLE001
@@ -387,7 +445,7 @@ class Scout:
         self._nudge(f"{why} No more tools. Call finish now with an honest report: the checklist of the objective's "
                     "parts ([done]/[partial]/[not done]) and what was tried for what is not done.")
         try:
-            r = self._model_turn(tools=[t for t in TOOLS if t["function"]["name"] == "finish"])
+            r = self._model_turn(tools=[t for t in self.tools if t["function"]["name"] == "finish"])
             report = ""
             for c in r.tool_calls:
                 if c.function.name == "finish":
@@ -486,7 +544,8 @@ class Scout:
             else:
                 t0 = time.perf_counter()
                 try:
-                    result = run_with_time_limit(self.call, self.tool_seconds, client, name, args)
+                    limit = None if name == "research_subtasks" else self.tool_seconds   # it has its own budgets
+                    result = run_with_time_limit(self.call, limit, client, name, args)
                     ok = not (isinstance(result, dict) and (result.get("error") or result.get("verified") is False))
                 except DeadlineExceeded as e:
                     result, ok = {"error": f"{e}; try a lighter step or another source"}, False

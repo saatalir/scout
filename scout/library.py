@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,7 @@ from dotenv import load_dotenv
 from .config import ROOT
 
 INDEX = ".scout-index.jsonl"
+_SAVE_LOCK = threading.Lock()         # sub-agents save in parallel: dedup check + write must be one step
 VIDEO_HOSTS = ("youtube.com", "youtu.be", "vimeo.com")
 AUDIO_EXT = (".mp3", ".m4a", ".wav", ".ogg", ".flac")
 VIDEO_EXT = (".mp4", ".mkv", ".webm", ".mov")
@@ -125,6 +127,11 @@ def find_existing(*, doi: str | None = None, arxiv: str | None = None, url: str 
 
 
 def save_item(item: Item, *, task_id: str, body: str = "", file: Path | None = None) -> tuple[Path, bool]:
+    with _SAVE_LOCK:
+        return _save_item(item, task_id=task_id, body=body, file=file)
+
+
+def _save_item(item: Item, *, task_id: str, body: str = "", file: Path | None = None) -> tuple[Path, bool]:
     """Write one item to the inbox. Returns (path to its .md, created).
 
     If the library already holds the same DOI, arXiv id, URL or file, nothing is
