@@ -282,8 +282,10 @@ def test_agent_research_flow_saves_verified_paper():
     llm.chat = chat
     rec = s.run()
     assert rec.status == "done", rec.report
-    assert [st.tool for st in rec.steps] == ["search_papers", "download_file", "save_to_library", "finish"]
-    assert all(st.ok for st in rec.steps)
+    assert [st.tool for st in rec.steps] == ["search_papers", "download_file", "save_to_library", "verify_report",
+                                             "finish"]
+    assert all(st.ok for st in rec.steps if st.tool != "verify_report")   # this fake model cannot verify
+    assert "Not verified" in rec.report
     meta = read_front_matter(__import__("pathlib").Path(rec.files[0]))
     assert meta["arxiv"] == "1706.03762" and meta["file"].endswith(".pdf") and meta["task_id"] == rec.id
     # the record is saved and resumable

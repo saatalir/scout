@@ -189,7 +189,7 @@ class Scout:
                  web_search_fn: Callable[..., Any] | None = None,
                  task_minutes: float | None = TASK_MINUTES, tool_seconds: float | None = TOOL_SECONDS,
                  model_policy: RetryPolicy | None = None, tools: list[dict] | None = None,
-                 save_task_id: str | None = None):
+                 save_task_id: str | None = None, verify: bool = True):
         if record.tor is None:
             raise ValueError("record.tor must be decided (ask the user) before the task runs")
         self.rec = record
@@ -207,12 +207,14 @@ class Scout:
         self._files_lock = __import__("threading").Lock()
         self.tools = tools or TOOLS
         self.save_task_id = save_task_id or record.id        # sub-agents file items under the parent task
+        self.verify = verify                                  # sub-agents skip it: the parent verifies the whole report
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
         st.setdefault("fail_streak", 0)
         st.setdefault("steps_since_progress", 0)
         st.setdefault("finish_challenged", False)
         st.setdefault("wrapup_sent", False)
+        st.setdefault("verified", False)
 
     # -- tools ------------------------------------------------------------------------------
     def _search_papers(self, client: httpx.Client, a: dict) -> Any:
@@ -359,7 +361,7 @@ class Scout:
             sub = Scout(child, llm=self.llm, notify=lambda m: self.notify(f"  [sub {n}] {m}"),
                         max_steps=SUB_STEPS, client_factory=self.client_factory, web_search_fn=self.web_search_fn,
                         task_minutes=SUB_MINUTES, tool_seconds=self.tool_seconds, model_policy=self.model_policy,
-                        tools=sub_tools, save_task_id=self.save_task_id)
+                        tools=sub_tools, save_task_id=self.save_task_id, verify=False)
             try:
                 child = sub.run()
             except Exception as e:  # noqa: BLE001
@@ -510,7 +512,7 @@ class Scout:
                                                                  "Call the tool again with a valid JSON object."})})
                 continue
             if name == "finish":
-                recent_failures = [s for s in rec.steps[-8:] if not s.ok]
+                recent_failures = [s for s in rec.steps[-8:] if not s.ok and s.tool != "verify_report"]
                 if recent_failures and not st["finish_challenged"] and len(rec.steps) < self.max_steps - 2 \
                         and not self.deadline.expired:
                     st["finish_challenged"] = True        # R7: challenge a premature finish once
@@ -521,7 +523,28 @@ class Scout:
                           "call finish again with the checklist; otherwise try them now.")})
                     self.notify("finish challenged: failures remain")
                     continue
-                rec.report = str(args.get("report", "")).strip()
+                report = str(args.get("report", "")).strip()
+                if self.verify and rec.files and not st["verified"]:
+                    st["verified"] = True                    # check claims against stored sources, once
+                    from .verify import verify_report
+                    self.notify("verifying the report against stored sources")
+                    try:
+                        v = run_with_time_limit(verify_report, 300, self.llm, report, rec.files)
+                    except Exception as e:  # noqa: BLE001
+                        from .verify import Verification
+                        v = Verification(error=type(e).__name__)
+                    rec.log("verify_report", {}, v.ok, v.note() + (
+                        f" Unsupported: {[c.get('claim', '')[:80] for c in v.unsupported]}" if v.unsupported else ""))
+                    if v.unsupported and len(rec.steps) < self.max_steps - 1:
+                        listing = "\n".join(f"- {c.get('claim', '')}" for c in v.unsupported[:8])
+                        rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": (
+                            "Verification: these claims are not supported by the sources you saved:\n" + listing
+                            + "\nCorrect the report: remove them, or fix them to match the sources (fetch more if "
+                              "needed). Then call finish again.")})
+                        self.notify(f"verification: {len(v.unsupported)} unsupported claims sent back")
+                        continue
+                    report = f"{report}\n\n{v.note()}"
+                rec.report = report
                 rec.status = "done"
                 rec.log("finish", {}, True, rec.report[:200])
                 rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": "ok"})
