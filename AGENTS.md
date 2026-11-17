@@ -37,6 +37,9 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/net.py` | HTTP client for tools; Tor on = SOCKS over an SSH tunnel to the VM's tor | `http_client(tor)`, `TorUnavailable` |
 | `scout/tools/academic.py` | Tier 1: arXiv, OpenAlex, Crossref → one `Paper` shape | `search_papers(client, query, source, …)` |
 | `scout/tools/web.py` | Tier 2: page → Markdown; downloads verified by type, size and PDF title | `fetch_page()`, `download_file()`, `pdf_text()` |
+| `scout/approvals.py` | Approval policy for irreversible actions: ask / auto / deny, domain allowlist, payments switch | `ApprovalPolicy.from_env()`, `.decide()` |
+| `scout/browser/page.py` | Page model: visible interactive elements with stable ids, labels, forms, banners; password values never read | `snapshot(page)`, `PageView.for_model()`, `locator_for()` |
+| `scout/browser/agent_tools.py` | Browser tools for the agent (open, read, click, type, select, scroll, click_submit) on one session per task; gates in code | `BROWSER_TOOLS`, `BrowserRunner` |
 | `scout/resilience.py` | R1/R3 primitives: transient vs permanent errors, `RetryPolicy`, `Retry-After`, per-host `CircuitBreaker`, `RetryTransport` (under all tool HTTP), `Deadline`, `run_with_time_limit`, `SCOUT_CHAOS_DOWN` fault injection | `is_transient()`, `RetryPolicy.call()`, `RetryTransport` |
 | `scout/verify.py` | Claims in the report checked against saved sources (extractor role) | `verify_report(llm, report, files)` |
 | `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
@@ -56,7 +59,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 2. **Do not set `max_tokens` below 512** for calls that need an answer. The model reasons first and can return an empty answer with `finish_reason=length`. Treat an empty answer as an error.
 3. **Tor is the user's choice.** When `SCOUT_TOR=ask`, ask the user once per task ("search through Tor: on or off?") and pass `tor=True/False` to every `web_search` call in that task. Never default it silently and never catch `TorChoiceRequired` just to continue without Tor.
 4. **Never bypass bot checks.** A blocked engine is skipped. If every engine is blocked, return `needs_human` with the live-view URL. Do not add CAPTCHA solving, stealth plugins or fingerprint spoofing to get past blocks.
-5. **Never enter credentials or submit irreversible forms without explicit user approval.** (The `agent_loop` eval checks for an approval gate.)
+5. **Irreversible actions go through the approval gate** (`click_submit`, `request_approval` → `scout/approvals.py`). Who approves is the user's setting `SCOUT_APPROVALS`: `ask` (the human, default), `auto` (no human in the loop: Scout approves and records it, limited by `SCOUT_AUTO_APPROVE_DOMAINS`; payments only with `SCOUT_AUTO_APPROVE_PAYMENTS=yes`) or `deny` (dry run). Never bypass the gate in code. **Passwords and CAPTCHAs are hard limits in every mode:** `browser_type` refuses password fields; sign-ins use persistent browser profiles or `hand_to_human`.
 6. **DevTools, VNC, noVNC and Tor ports bind to `127.0.0.1` on the VM.** Reach them only through SSH tunnels or `tailscale serve`. Never bind them to `0.0.0.0`.
 7. **No personal or machine data in the repository.** Hostnames, the tailnet, users, IP addresses, keys and locations belong in `.env` (git-ignored). `config/browsers.yaml` uses `${VAR:-default}` placeholders. Captured pages go through `scrub_html` (`browser_check.py --capture` does this), and `test_fixtures_are_scrubbed` enforces it.
 8. **Scout's SSH key is used with `-i <key> -o IdentitiesOnly=yes -o BatchMode=yes`.** Never add password prompts or interactive SSH to Scout's code paths.
@@ -127,4 +130,6 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_BROWSERS_FILE` | path | Alternative to `config/browsers.yaml` |
 | `SCOUT_LIBRARY_DIR` | path | The knowledge library's inbox (default `./library-inbox`) |
 | `SCOUT_TASKS_DIR` | path | Task records (default `./tasks`) |
+| `SCOUT_APPROVALS` | `ask` / `auto` / `deny` | Who approves irreversible actions (§3 rule 5); `scout run --approvals` overrides per task |
+| `SCOUT_AUTO_APPROVE_DOMAINS`, `SCOUT_AUTO_APPROVE_PAYMENTS` | comma list / `yes`/`no` | Limits on `auto` approvals |
 | `SCOUT_CHAOS_DOWN` | comma list of hosts | **Tests and evals only:** makes those hosts unreachable (fault injection, eval task r12) |

@@ -75,10 +75,10 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 
 | ID | Package | Owner | Depends on | Acceptance | State |
 | --- | --- | --- | --- | --- | --- |
-| B1 | Page model for the agent: interactive elements with stable ids (accessibility tree plus a DOM fallback), text summary, forms | C | — | Fixture pages → correct element lists | |
-| B2 | Browser tools: `open`, `read`, `click`, `type`, `select`, `scroll`, `submit` (gated), `browser_download` (fetched back from the VM), `screenshot` | C | B1 | Tests on local fixture pages (local-test profile) | |
-| B3 | Browser resilience: navigation retries, re-snapshot after DOM changes, re-finding stale elements, cookie banners (reject non-essential), popups and new tabs, slow pages | C | B2, R-core | Fixture pages that misbehave on purpose | |
-| B4 | Human gates in the browser: approval before submit, pay or send; sign-in hand-off with the live-view link, then resume when the human says done | C | B2 | f01 and f02 pass | |
+| B1 | Page model for the agent: interactive elements with stable ids (accessibility tree plus a DOM fallback), text summary, forms | C | — | Fixture pages → correct element lists | **Done** |
+| B2 | Browser tools: `open`, `read`, `click`, `type`, `select`, `scroll`, `submit` (gated), `browser_download` (fetched back from the VM), `screenshot` | C | B1 | Tests on local fixture pages (local-test profile) | **Built** except `browser_download` and `screenshot` |
+| B3 | Browser resilience: navigation retries, re-snapshot after DOM changes, re-finding stale elements, cookie banners (reject non-essential), popups and new tabs, slow pages | C | B2, R-core | Fixture pages that misbehave on purpose | **Partly**: retries, re-read, stale ids, banner hint; popups and new tabs to do |
+| B4 | Human gates in the browser: approval before submit, pay or send; sign-in hand-off with the live-view link, then resume when the human says done | C | B2 | f01 and f02 pass | **Built**: gate in code, with the approval modes ask/auto/deny (`SCOUT_APPROVALS`); password refusal. Resume-after-sign-in to do |
 | B5 | Playbooks: YAML steps per site and task, with "fuzzy" steps sent to the model; traces of successful runs saved for promotion | C | B2 | f03 passes from a playbook | |
 | B6 | Cookie-banner and consent selector library across common consent platforms | **S** | B3 | Fixture tests | |
 | B7 | Browser fixture pages for tests (forms, banners, popups, slow and changing DOM) | **S** | B1 | Used by B2/B3 tests | |

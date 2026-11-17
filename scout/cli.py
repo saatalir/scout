@@ -64,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--tor", dest="tor", action="store_true", default=None)
     g.add_argument("--no-tor", dest="tor", action="store_false")
     run.add_argument("--max-steps", type=int, default=40)
+    run.add_argument("--approvals", choices=["ask", "auto", "deny"],
+                     help="who approves irreversible actions (default: SCOUT_APPROVALS, else ask)")
     res = sub.add_parser("resume", help="continue a paused or unfinished task")
     res.add_argument("task_id")
     res.add_argument("--max-steps", type=int, default=40)
@@ -90,7 +92,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         rec = TaskRecord.load(a.task_id)
     print(f"Task {rec.id} (Tor {'on' if rec.tor else 'off'})")
-    rec = Scout(rec, ask_approval=_approve, notify=lambda m: print("  " + m), max_steps=a.max_steps).run()
+    from .approvals import ApprovalPolicy
+    policy = ApprovalPolicy.from_env(getattr(a, "approvals", None))
+    if policy.mode != "ask":
+        print(f"Approvals: {policy.mode}" + (" (no human in the loop)" if policy.mode == "auto" else " (dry run)"))
+    rec = Scout(rec, ask_approval=_approve, notify=lambda m: print("  " + m), max_steps=a.max_steps,
+                approvals=policy).run()
     _print_result(rec)
     return 0 if rec.status == "done" else 1
 

@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import httpx
 
+from .approvals import ApprovalPolicy
 from .library import Item, find_existing, save_item
 from .llm import LLM
 from .net import http_client
@@ -98,6 +99,10 @@ TOOLS = [
     _tool("finish", "End the task with the final report for the user.",
           {"report": {"type": "string", "description": "Markdown. Cite saved items by title and DOI/arXiv id/URL."}}),
 ]
+# Tier 3: the real browser (Phase 2). Gates for submitting and passwords are enforced inside these tools.
+from .browser.agent_tools import BROWSER_TOOL_NAMES, BROWSER_TOOLS, BrowserRunner  # noqa: E402
+
+TOOLS = TOOLS[:-3] + BROWSER_TOOLS + TOOLS[-3:]          # keep request_approval, hand_to_human, finish last
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
 SYSTEM = """You are Online Scout, a local-first web research agent. You complete the user's objective with tools.
@@ -116,6 +121,10 @@ How to work
   Stop as soon as the objective is met.
 - For a broad objective with independent parts (several sub-topics, or many items to collect), split it with
   research_subtasks: up to 6 parts, worked on in parallel, each returning a summary and saved items.
+- Tier 3, the real browser: use browser_open for forms, sign-in flows and pages fetch_page cannot read. Act by
+  element id from the page listing. If a cookie banner is open, decline non-essential cookies first (click
+  "Reject all", "Decline" or similar). Submit forms and press anything that commits (submit, send, pay, order,
+  apply, delete) only with click_submit, which asks the human. Never type passwords: use hand_to_human.
 - Try hard. When a step fails, do not give up: use the alternatives — another source (openalex, crossref,
   arxiv), another URL (the paper's DOI or landing page, arXiv), web_search, a broader or simpler query.
   Network errors were already retried for you; read the error and change something before trying again.
@@ -154,7 +163,8 @@ FAIL_STREAK = 3                    # consecutive failed steps before a reflectio
 MODEL_OUTAGE_MINUTES = 10          # keep retrying an unreachable model this long, then pause as "waiting"
 SUB_PARALLEL = 2                   # Strata answers about two requests at once (measured)
 SUB_STEPS, SUB_MINUTES = 15, 15    # budget per research sub-agent
-SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human")   # sub-agents report, never hand off
+SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human",  # sub-agents report, never hand off,
+                *BROWSER_TOOL_NAMES)                                       # and research without the browser
 
 
 class ModelUnavailable(RuntimeError):
@@ -189,7 +199,9 @@ class Scout:
                  web_search_fn: Callable[..., Any] | None = None,
                  task_minutes: float | None = TASK_MINUTES, tool_seconds: float | None = TOOL_SECONDS,
                  model_policy: RetryPolicy | None = None, tools: list[dict] | None = None,
-                 save_task_id: str | None = None, verify: bool = True):
+                 save_task_id: str | None = None, verify: bool = True,
+                 browser_profile: str | None = None, browser_setup: Callable[..., Any] | None = None,
+                 approvals: "ApprovalPolicy | None" = None):
         if record.tor is None:
             raise ValueError("record.tor must be decided (ask the user) before the task runs")
         self.rec = record
@@ -208,6 +220,9 @@ class Scout:
         self.tools = tools or TOOLS
         self.save_task_id = save_task_id or record.id        # sub-agents file items under the parent task
         self.verify = verify                                  # sub-agents skip it: the parent verifies the whole report
+        self.browser_profile, self.browser_setup = browser_profile, browser_setup
+        self._browser: BrowserRunner | None = None
+        self.approvals = approvals or ApprovalPolicy.from_env()       # ask (default) | auto | deny
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
         st.setdefault("fail_streak", 0)
@@ -323,13 +338,36 @@ class Scout:
             self.rec.files.append(str(md))
         return {"saved": created, "already_in_library": not created, "item": md.name}
 
-    def _approval(self, a: dict) -> Any:
+    @property
+    def browser(self) -> BrowserRunner:
+        if self._browser is None:
+            profile = self.browser_profile
+            if profile is None:
+                from .browser.config import load_browser_config
+                cfg = load_browser_config()
+                profile = (cfg.search.tor_profile if self.rec.tor else cfg.search.profile) or cfg.search.profile
+            self._browser = BrowserRunner(profile, setup=self.browser_setup)
+        return self._browser
+
+    def _gate(self, summary: str) -> bool:
+        """The approval gate for click_submit: decided here and logged as its own step, before the click."""
+        url = self._browser.view.url if self._browser and self._browser.view else None
+        out = self._approval({"action_summary": summary}, url=url)
+        self.rec.log("request_approval", {"action_summary": summary, "url": url}, True,
+                     f"{out['decision']} ({out['by']})")
+        self.notify(f"approval for {summary!r}: {out['decision']} ({out['by']})")
+        return out["decision"] == "approved"
+
+    def _approval(self, a: dict, url: str | None = None) -> Any:
+        """Who approves depends on SCOUT_APPROVALS: the human (ask), Scout itself within limits (auto), or no one (deny)."""
         summary = a.get("action_summary", "").strip()
         self.rec.pending_approval = summary
         self.rec.save()
-        approved = bool(self.ask_approval(summary))
+        d = self.approvals.decide(summary, url, self.ask_approval)
         self.rec.pending_approval = None
-        return {"decision": "approved" if approved else "denied"}
+        self.rec.state.setdefault("approvals", []).append({"action": summary, "url": url,
+                                                           "approved": d.approved, "by": d.how})
+        return {"decision": "approved" if d.approved else "denied", "by": d.how}
 
     def call(self, client: httpx.Client, name: str, a: dict) -> Any:
         if name == "search_papers":
@@ -346,6 +384,8 @@ class Scout:
             return self._approval(a)
         if name == "research_subtasks":
             return self._subtasks(a)
+        if name in BROWSER_TOOL_NAMES:
+            return self.browser.call(name, a, approve=self._gate)
         raise ValueError(f"unknown tool {name!r}; tools: {', '.join(TOOL_NAMES)}")
 
     def _run_sub(self, n: int, question: str) -> dict:
@@ -494,6 +534,13 @@ class Scout:
             rec.report = (f"Paused: the model did not answer for {MODEL_OUTAGE_MINUTES} minutes ({e}). "
                           f"Run `python -m scout resume {rec.id}` when it is back.")
             self.notify(rec.report)
+        finally:
+            if self._browser is not None:
+                try:
+                    self._browser.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._browser = None
         rec.save()
         return rec
 
