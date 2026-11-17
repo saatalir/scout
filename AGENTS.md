@@ -17,7 +17,8 @@ This file is for coding agents. It gives you the facts you need to change this r
 
 - Phase 0 (model feasibility) is done.
 - The browser layer is done and verified live.
-- Phase 1 (Research Scout) is **in progress**: task record, tier 1 APIs, fetch/download, library hand-off, planner loop, CLI and the fixed task eval set are built; parallel sub-agents are next. See [docs/PHASE1.md](docs/PHASE1.md).
+- Phase 1 (Research Scout) is **in progress**: agent loop, task record, tier 1 APIs, fetch/download, library hand-off, CLI, the fixed task eval set, the resilience layer, parallel sub-agents and claim verification are built. The plan for everything left is [docs/ROADMAP.md](docs/ROADMAP.md); Phase 1 detail is in [docs/PHASE1.md](docs/PHASE1.md).
+- **Core theme: resilience.** Scout must try hard to complete its mission, within safety. The principles R1–R8 are in ROADMAP §1.
 
 ## 2. Repository map
 
@@ -36,8 +37,11 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/net.py` | HTTP client for tools; Tor on = SOCKS over an SSH tunnel to the VM's tor | `http_client(tor)`, `TorUnavailable` |
 | `scout/tools/academic.py` | Tier 1: arXiv, OpenAlex, Crossref → one `Paper` shape | `search_papers(client, query, source, …)` |
 | `scout/tools/web.py` | Tier 2: page → Markdown; downloads verified by type, size and PDF title | `fetch_page()`, `download_file()`, `pdf_text()` |
+| `scout/resilience.py` | R1/R3 primitives: transient vs permanent errors, `RetryPolicy`, `Retry-After`, per-host `CircuitBreaker`, `RetryTransport` (under all tool HTTP), `Deadline`, `run_with_time_limit`, `SCOUT_CHAOS_DOWN` fault injection | `is_transient()`, `RetryPolicy.call()`, `RetryTransport` |
+| `scout/verify.py` | Claims in the report checked against saved sources (extractor role) | `verify_report(llm, report, files)` |
+| `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
 | `scout/cli.py` | `python -m scout run/resume/show/list`; asks the Tor question and approvals on the terminal | `main()` |
-| `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (17 tasks, phase-tagged) and its runner/checks | `python -m evals.phase_tasks` |
+| `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (20 tasks, phase-tagged; r11–r13 test resilience) and its runner/checks | `python -m evals.phase_tasks` |
 | `deploy/browser-vm/scout-browser` | Helper on the VM (stdlib-only Python); one JSON object per call | `start`, `stop`, `status` |
 | `deploy/browser-vm/setup.sh` | Idempotent VM setup (root) | — |
 | `config/browsers.yaml` | Hosts, profiles (`research`, `research-tor`, `local-test`), search and Tor settings | — |
@@ -61,6 +65,9 @@ This file is for coding agents. It gives you the facts you need to change this r
 11. **Nothing reaches the library unverified.** `save_to_library` refuses a download whose verification failed; saves are deduplicated by DOI, arXiv id, URL and file hash (`scout/library.py`). Keep the front-matter contract fields stable: the library's ingestion depends on them.
 12. **The task record is the source of truth.** Every tool call is logged with `TaskRecord.log`; a task must be resumable from `task.json` alone.
 13. **Do not change a task's checks in `evals/tasks/tasks.yaml`** once results exist for it; add a new task instead, so runs stay comparable.
+14. **Resilience never overrides safety.** Retries and fallbacks must not bypass a CAPTCHA, skip an approval gate, enter credentials or downgrade Tor to direct. If a safety condition blocks the path, report it or hand off.
+15. **External calls are retried centrally.** HTTP: automatically, by `RetryTransport` in `scout.net`. Model: `Scout._model_turn`. Do not add ad-hoc retry loops in tools; add fallbacks (other sources or locations) instead, and report what was tried.
+16. **Never give a coding agent tools on this machine.** Delegate through `scripts/delegate.py`: the model returns files, tests run under `sandbox-exec`, and nothing merges unreviewed. An opencode `--auto` run escaped its policy once (ROADMAP §2).
 
 ## 4. Commands
 
@@ -120,3 +127,4 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_BROWSERS_FILE` | path | Alternative to `config/browsers.yaml` |
 | `SCOUT_LIBRARY_DIR` | path | The knowledge library's inbox (default `./library-inbox`) |
 | `SCOUT_TASKS_DIR` | path | Task records (default `./tasks`) |
+| `SCOUT_CHAOS_DOWN` | comma list of hosts | **Tests and evals only:** makes those hosts unreachable (fault injection, eval task r12) |

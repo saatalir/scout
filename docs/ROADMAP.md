@@ -49,21 +49,21 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 
 | ID | Package | Owner | Depends on | Acceptance | State |
 | --- | --- | --- | --- | --- | --- |
-| X1 | Delegation harness (`scripts/delegate.py`) | C | — | A trivial delegated task lands through it; denied commands are refused | |
-| R-core | Resilience core: `scout/resilience.py`. Retry policy (R1) with error classification, `Retry-After`, per-host circuit breaker; deadlines (R3) | C | — | Unit tests: transient retried, permanent not, `Retry-After` honoured, breaker opens and closes, deadline enforced | |
-| R-model | Model-call resilience: empty or truncated answers retried with a bigger budget; malformed tool arguments repaired; model outage → wait, then pause as `waiting` (R6) | C | R-core | Tests with a fake model that fails in each way | |
-| R-loop | Agent loop resilience: stuck detection and reflection (R4), budgets and wrap-up (R3), progress checklist and honest report (R7), auto-resume (R5) | C | R-core | Tests: a repeated call triggers reflection; budget exhaustion triggers wrap-up; the report lists unmet parts | |
-| R-fallback | Fallback chains inside tools (R2): academic-source fallback; PDF location chain (OA → arXiv → OpenAlex locations → landing-page link); fetch retries through mirrors | C | R-core | Tests: the first source fails or is empty → the next is used; a PDF found via the landing page | |
-| A1 | Semantic Scholar adapter (Graph API, no key, rate-limit aware) | **S** | R-core | Fixture tests and one live call | |
-| A2 | PubMed adapter (E-utilities esearch + esummary, no key) | **S** | R-core | Fixture tests and one live call | |
-| A3 | Zenodo adapter (records API: datasets and papers with file links) | **S** | R-core | Fixture tests and one live call | |
-| A4 | Open-data portals: data.europa.eu / CKAN `package_search`, Eurostat dataflow search | **S** | R-core | Fixture tests and one live call | |
-| SA | Parallel research sub-agents: a `delegate_research` tool, about 2 concurrent (Strata answers ~2 requests in parallel), each with its own budget, returning summaries and item paths; failures retried or reported | C | R-loop | Tests with a fake model; r02 faster than the 479 s baseline | |
-| VF | Research verification: every claim in the report checked against stored source text (extractor role); unsupported claims fixed or flagged | C | R-loop | Tests: an unsupported claim is caught; eval checks on the report | |
+| X1 | Delegation harness (`scripts/delegate.py`) | C | — | A trivial delegated task lands through it; denied commands are refused | **Done** (v2: code-only, sandboxed tests; see §2) |
+| R-core | Resilience core: `scout/resilience.py`. Retry policy (R1) with error classification, `Retry-After`, per-host circuit breaker; deadlines (R3) | C | — | Unit tests: transient retried, permanent not, `Retry-After` honoured, breaker opens and closes, deadline enforced | **Done** |
+| R-model | Model-call resilience: empty or truncated answers retried with a bigger budget; malformed tool arguments repaired; model outage → wait, then pause as `waiting` (R6) | C | R-core | Tests with a fake model that fails in each way | **Done** |
+| R-loop | Agent loop resilience: stuck detection and reflection (R4), budgets and wrap-up (R3), progress checklist and honest report (R7), auto-resume (R5) | C | R-core | Tests: a repeated call triggers reflection; budget exhaustion triggers wrap-up; the report lists unmet parts | **Done** |
+| R-fallback | Fallback chains inside tools (R2): academic-source fallback; PDF location chain (OA → arXiv → OpenAlex locations → landing-page link); fetch retries through mirrors | C | R-core | Tests: the first source fails or is empty → the next is used; a PDF found via the landing page | **Done** |
+| A1 | Semantic Scholar adapter (Graph API, no key, rate-limit aware) | **S** | R-core | Fixture tests and one live call | Delegated |
+| A2 | PubMed adapter (E-utilities esearch + esummary, no key) | **S** | R-core | Fixture tests and one live call | Delegated |
+| A3 | Zenodo adapter (records API: datasets and papers with file links) | **S** | R-core | Fixture tests and one live call | Delegated |
+| A4 | Open-data portals: CKAN `package_search` (several government portals); Eurostat later | **S** | R-core | Fixture tests and one live call | Delegated |
+| SA | Parallel research sub-agents: a `research_subtasks` tool, about 2 concurrent (Strata answers ~2 requests in parallel), each with its own budget, returning summaries and item paths; failures retried or reported | C | R-loop | Tests with a fake model; r02 faster than the 479 s baseline | **Built** (tests pass; live timing in G1) |
+| VF | Research verification: every claim in the report checked against stored source text (extractor role); unsupported claims fixed or flagged | C | R-loop | Tests: an unsupported claim is caught; eval checks on the report | **Built** (tests pass) |
 | LIB | Point `SCOUT_LIBRARY_DIR` at the real knowledge-library inbox; confirm the front-matter fields its ingestion needs | **U** + C | — | One real item ingested by the library | |
 | G1 | Phase 1 gate: all phase-1 tasks, 3 repeats, plus new resilience tasks (r11–r13 below) | C | all above | Pass rate ≥ threshold (set from baselines) | |
 
-**New resilience eval tasks** (added, not changing existing ones):
+**New resilience eval tasks** (added, not changing existing ones; **in `tasks.yaml`**):
 
 | ID | Task | What it proves |
 | --- | --- | --- |
