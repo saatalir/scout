@@ -203,3 +203,57 @@ def download_file(client: httpx.Client, url: str, dest_dir: Path, *, filename: s
     return Download(url=final_url, path=str(path), bytes=len(data), content_type=ctype, kind=kind,
                     verified=not problems, sha256=hashlib.sha256(data).hexdigest(), problems=problems,
                     pdf_pages=pages, pdf_title=pdf_title, first_text=first_text[:1500])
+
+
+# -- alternative PDF locations (R2: alternatives before giving up) ---------------------------------
+
+def _landing_pdf_links(html: str, base: str) -> list[str]:
+    """PDF links a publisher page advertises: the citation_pdf_url meta tag first, then .pdf / /pdf/ links."""
+    from urllib.parse import urljoin
+    out = [m.group(1) for m in re.finditer(
+        r'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)', html, re.I)]
+    out += [m.group(1) for m in re.finditer(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']citation_pdf_url["\']', html, re.I)]
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\']', html, re.I):
+        href = m.group(1)
+        if re.search(r"\.pdf($|[?#])|/pdf(/|$)", href, re.I):
+            out.append(href)
+    seen, links = set(), []
+    for h in out:
+        u = urljoin(base, h.replace("&amp;", "&"))
+        if u.startswith("http") and u not in seen:
+            seen.add(u)
+            links.append(u)
+    return links[:5]
+
+
+def pdf_candidates(client: httpx.Client, failed_url: str, *, doi: str | None = None, arxiv: str | None = None,
+                   landing_url: str | None = None) -> list[str]:
+    """Other places the same PDF may be, most reliable first. Each lookup is best effort."""
+    cands: list[str] = []
+    if arxiv:
+        cands.append(f"https://arxiv.org/pdf/{re.sub(r'v\\d+$', '', arxiv.strip())}")
+    if doi:
+        try:
+            r = client.get(f"https://api.openalex.org/works/doi:{doi.strip()}")
+            if r.status_code == 200:
+                w = r.json()
+                best = (w.get("best_oa_location") or {}).get("pdf_url")
+                cands += [best] if best else []
+                cands += [l.get("pdf_url") for l in w.get("locations") or [] if l.get("pdf_url")]
+        except Exception:  # noqa: BLE001 - one lookup failing must not stop the others
+            pass
+    for page in [p for p in (landing_url, failed_url, f"https://doi.org/{doi}" if doi else None) if p]:
+        try:
+            r = client.get(page)
+            if r.status_code == 200 and "html" in r.headers.get("content-type", ""):
+                cands += _landing_pdf_links(r.text, str(r.url))
+                break
+        except Exception:  # noqa: BLE001
+            continue
+    seen, out = {failed_url}, []
+    for c in cands:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out[:6]

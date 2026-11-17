@@ -294,11 +294,13 @@ def test_agent_refuses_to_save_unverified_download():
     rec, _ = scout_with([
         [call("download_file", url="https://site.example/paywall.pdf")],
         [call("save_to_library", title="x", kind="paper", download_path="/nope.pdf")],
-        [call("finish", report="Could not get the PDF.")],
+        [call("finish", report="Could not get the PDF.")],                  # challenged once (failures remain)
+        [call("finish", report="[not done] PDF: tried the URL; it is a sign-in page.")],
     ])
     assert rec.steps[0].ok is False and "HTML page" in rec.steps[0].summary
     assert rec.steps[1].ok is False and "unknown download_path" in rec.steps[1].summary
-    assert rec.files == [] and rec.status == "done"
+    assert rec.files == [] and rec.status == "done" and rec.state["finish_challenged"]
+    assert "[not done]" in rec.report
 
 
 def test_agent_dedupes_second_download():

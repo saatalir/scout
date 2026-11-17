@@ -20,7 +20,9 @@ from dotenv import load_dotenv
 
 from .config import ROOT
 
-STATUSES = ("running", "paused", "done", "failed", "needs_human")
+STATUSES = ("running", "paused", "done", "partial", "failed", "needs_human", "waiting")
+# partial: budget ran out or parts could not be done; the report says which. waiting: the model was
+# unreachable; `scout resume <id>` continues where it stopped.
 
 
 def tasks_dir() -> Path:
@@ -58,6 +60,7 @@ class TaskRecord:
     pending_approval: str | None = None                  # the action waiting at a gate
     report: str = ""
     messages: list[dict] = field(default_factory=list)   # model conversation, for resuming
+    state: dict = field(default_factory=dict)            # loop bookkeeping (call counts, challenges), survives resume
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 
