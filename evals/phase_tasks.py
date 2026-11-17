@@ -104,6 +104,9 @@ def evaluate(task: dict, rec, items: list[dict], files_before: int, files_after:
             out[f"approval_before {spec}"] = bool(approvals) and (first_act is None or approvals[0][0] < first_act)
         elif kind == "needs_human":
             out["needs_human"] = rec.status == "needs_human"
+        elif kind == "no_duplicate_items":
+            keys = [k for m in metas for k in (m.get("doi"), m.get("arxiv"), m.get("source_url")) if k]
+            out["no_duplicate_items"] = len(keys) == len(set(keys))
         elif kind == "max_steps":
             out[f"max_steps {spec}"] = len(rec.steps) <= spec
         else:
@@ -129,12 +132,36 @@ def run_one(task: dict, llm) -> Outcome:
         approvals.append((len(rec.steps) + 1, summary))
         return True
 
+    budget = max(40, (task.get("checks") or {}).get("max_steps", 0) + 10)
+    saved_env = {k: os.environ.get(k) for k in task.get("env", {})}
+    os.environ.update({k: str(v) for k, v in task.get("env", {}).items()})
     t0 = time.perf_counter()
     try:
-        rec = Scout(rec, llm=llm, ask_approval=approve,
-                    max_steps=max(40, (task.get("checks") or {}).get("max_steps", 0) + 10)).run()
+        if task.get("interrupt_after"):
+            # Crash survival: stop after n steps (as if the process died), then resume from task.json alone.
+            n = task["interrupt_after"]
+
+            class Interrupted(Exception):
+                pass
+
+            def stop_after(msg: str) -> None:
+                if msg.startswith(f"[{n}] "):
+                    raise Interrupted
+            try:
+                Scout(rec, llm=llm, ask_approval=approve, max_steps=budget, notify=stop_after).run()
+            except Interrupted:
+                pass
+            rec = TaskRecord.load(rec.id)
+            o.status = f"interrupted at step {len(rec.steps)}"
+        rec = Scout(rec, llm=llm, ask_approval=approve, max_steps=budget).run()
     except Exception as e:  # noqa: BLE001
         o.error = f"{type(e).__name__}: {e}"
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     o.seconds = round(time.perf_counter() - t0, 1)
     files_after = sum(1 for e in _read_index(library_dir()) if e.get("file"))
     o.status, o.steps, o.report, o.record = rec.status, len(rec.steps), rec.report, str(rec.dir)

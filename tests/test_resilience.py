@@ -202,3 +202,14 @@ def test_run_with_time_limit():
     assert run_with_time_limit(lambda: 5, 1.0) == 5
     with pytest.raises(DeadlineExceeded):
         run_with_time_limit(time.sleep, 0.05, 1.0)
+
+
+def test_chaos_switch_marks_hosts_down(monkeypatch):
+    monkeypatch.setenv("SCOUT_CHAOS_DOWN", "api.openalex.org")
+    t = FakeTime()
+    tr, seen = transport_with([httpx.Response(200)], t)
+    with httpx.Client(transport=tr) as c:
+        with pytest.raises(httpx.ConnectError, match="chaos"):
+            c.get("https://api.openalex.org/works")
+        assert c.get("https://api.crossref.org/works").status_code == 200
+    assert seen == ["api.crossref.org"]

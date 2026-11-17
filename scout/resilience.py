@@ -17,6 +17,7 @@ through (half-open) and closes again on success.
 from __future__ import annotations
 
 import email.utils
+import os
 import random
 import threading
 import time
@@ -192,6 +193,9 @@ class RetryTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
+        # Fault injection for resilience evals: SCOUT_CHAOS_DOWN="api.openalex.org,…" makes those hosts unreachable.
+        if host in {h.strip() for h in os.environ.get("SCOUT_CHAOS_DOWN", "").split(",") if h.strip()}:
+            raise httpx.ConnectError(f"chaos: {host} is marked down (SCOUT_CHAOS_DOWN)", request=request)
         breaker = self.breakers.get(host)
         start = self.policy.clock()
         # The breaker guards a host across *separate* requests; it is checked before the first try only,

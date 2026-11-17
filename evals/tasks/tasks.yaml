@@ -24,6 +24,9 @@
 #     approval_before:    tool                                          request_approval precedes that tool
 #     needs_human:        true                                          the task stopped for a human (sign-in)
 #     max_steps:          n                                             finished within n tool steps
+#     no_duplicate_items: true                                          no two saved items share a DOI/arXiv id/URL
+#   env              environment variables set for that task only (e.g. SCOUT_CHAOS_DOWN fault injection)
+#   interrupt_after  stop the task after n steps, then resume it from its saved record (crash survival)
 
 tasks:
   # ---------------------------------------------------------------- phase 1: research
@@ -173,6 +176,45 @@ tasks:
       verified_files: {n: 1, kind: pdf}
       pdf_title_matches: "HTTP Semantics"
       max_steps: 8
+
+  # ---------------------------------------------------------------- phase 1: resilience (R1-R8)
+  - id: r11-dead-pdf-link
+    phase: 1
+    objective: >-
+      Download the PDF of "Attention Is All You Need" from
+      https://raw.githubusercontent.com/saatalir/scout/main/evals/fixtures/attention-missing.pdf
+      and save it to the library with its metadata.
+    tor: false
+    needs: [api, web]
+    checks:
+      verified_files: {n: 1, kind: pdf}
+      pdf_title_matches: "Attention Is All You Need"
+      max_steps: 10
+
+  - id: r12-source-outage
+    phase: 1
+    env: {SCOUT_CHAOS_DOWN: api.openalex.org}
+    objective: >-
+      Find 3 papers published since 2022 on hydrogen embrittlement of pipeline steels and save
+      their metadata to the library.
+    tor: false
+    needs: [api]
+    checks:
+      min_items: {n: 3, year_from: 2022}
+      max_steps: 12
+
+  - id: r13-crash-resume
+    phase: 1
+    interrupt_after: 3
+    objective: >-
+      Find 4 papers published since 2023 on ammonia as a hydrogen carrier and save their metadata
+      to the library.
+    tor: false
+    needs: [api]
+    checks:
+      min_items: {n: 4, year_from: 2023}
+      no_duplicate_items: true
+      max_steps: 16
 
   # ---------------------------------------------------------------- phase 2: browser forms
   # Public test forms stand in until the first real playbook targets are chosen
