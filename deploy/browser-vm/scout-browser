@@ -117,6 +117,9 @@ def cmd_start(a) -> None:
         f"--window-size={w},{h}",
         f"--lang={a.locale}",
     ]
+    if sys.platform == "darwin":
+        # Only when the helper runs on a Mac (the offline tests): skip the macOS Keychain prompt.
+        args.append("--use-mock-keychain")
     if a.headless:
         args.append("--headless=new")
     if a.proxy:

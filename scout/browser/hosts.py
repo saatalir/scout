@@ -127,6 +127,10 @@ def browser_args(profile: Profile, port: int, data_dir: Path) -> list[str]:
     args = [f"--user-data-dir={data_dir}", f"--remote-debugging-port={port}",
             "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check",
             "--disable-session-crashed-bubble", f"--window-size={w},{h}", f"--lang={profile.locale}"]
+    if sys.platform == "darwin":
+        # Without this, every launch asks the macOS Keychain for "Chromium Safe Storage" (a password
+        # prompt). Local profiles are for development and tests; real sign-ins live on the VM.
+        args.append("--use-mock-keychain")
     if profile.headless:
         args.append("--headless=new")
     if profile.proxy:
