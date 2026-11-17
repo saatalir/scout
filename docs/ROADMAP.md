@@ -32,7 +32,7 @@ Building with two models saves tokens without lowering quality:
 
 **Delegation harness** (`scripts/delegate.py`, package X1):
 
-1. Creates an isolated git worktree (`../online-scout-delegate/<name>`) on a branch `delegate/<name>`.
+1. Creates an isolated standalone git clone (`../online-scout-delegate/<name>`) on a branch `delegate/<name>`. Not a worktree: opencode treats a worktree as the main repository and ignores its policy (found in the smoke test). opencode runs with `--standalone`; a preflight confirms it loaded the clone's policy, and any change to the main checkout during a run is flagged as an escape and blocks merging.
 2. Writes an `opencode.json` permission policy into it:
    - **Allowed:** edit and read inside the worktree, and run `./run-tests`.
    - **Denied:** every other shell command, web fetch and search, sub-tasks, and anything outside the worktree.

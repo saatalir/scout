@@ -1,19 +1,24 @@
-"""Delegate a well-specified coding task to Strata (via opencode) in an isolated git worktree.
+"""Delegate a well-specified coding task to Strata (via opencode) in an isolated git clone.
 
     python scripts/delegate.py start <name> [--minutes 45]   # spec: docs/delegation/<name>.md
     python scripts/delegate.py check <name>                  # rerun the tests, show the diff, enforce allowed files
     python scripts/delegate.py merge <name>                  # apply the reviewed change to this checkout (uncommitted)
-    python scripts/delegate.py drop  <name>                  # remove the worktree and its branch
+    python scripts/delegate.py drop  <name>                  # remove the clone
 
 How it is contained (docs/ROADMAP.md §2):
-- The work happens in ../online-scout-delegate/<name>, on branch delegate/<name>, from HEAD.
-  Commit what the task depends on before starting.
-- An opencode.json there allows editing and reading inside the worktree and running
+- The work happens in a standalone clone, ../online-scout-delegate/<name> (branch delegate/<name>,
+  from HEAD). Not a git worktree: opencode resolves a worktree to the main repository and then
+  ignores the worktree's policy. Commit what the task depends on before starting.
+- opencode runs with --standalone (a private server, not the shared background service), and a
+  preflight confirms it loaded the clone's opencode.json; otherwise nothing runs.
+- The main checkout's state is recorded before and after the run; any change is an ESCAPE and
+  blocks merge.
+- An opencode.json there allows editing and reading inside the clone and running
   ./run-tests; it denies every other shell command, web access, sub-tasks and any
-  path outside the worktree. Explicit denies hold even with --auto.
+  path outside the clone. Explicit denies hold even with --auto.
 - The spec's front matter lists the files the task may touch (`files:`, globs); `check`
   fails if anything else changed. Nothing is merged without `check` passing and review.
-- .env is not in the worktree; only STRATA_API_KEY is passed to opencode itself.
+- .env is not in the clone; only STRATA_API_KEY is passed to opencode itself.
 """
 
 from __future__ import annotations
@@ -89,17 +94,14 @@ def wt(name: str) -> Path:
 def start(name: str, minutes: int) -> int:
     meta, body = load_spec(name)
     if sh("git", "status", "--porcelain", "--", f"docs/delegation/{name}.md").strip():
-        raise SystemExit(f"commit docs/delegation/{name}.md first: the worktree is made from HEAD")
+        raise SystemExit(f"commit docs/delegation/{name}.md first: the clone is made from HEAD")
     path = wt(name)
     if path.exists():
         raise SystemExit(f"{path} exists: `drop {name}` first, or `check {name}`")
     WT_ROOT.mkdir(exist_ok=True)
-    sh("git", "worktree", "add", "-q", "-b", f"delegate/{name}", str(path), "HEAD")
-    exclude = Path(sh("git", "rev-parse", "--git-common-dir").strip())
-    exclude = (exclude if exclude.is_absolute() else ROOT / exclude) / "info" / "exclude"
-    lines = exclude.read_text().splitlines() if exclude.exists() else []
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    exclude.write_text("\n".join(lines + [f for f in LOCAL_FILES if f not in lines]) + "\n")
+    sh("git", "clone", "-q", "--no-hardlinks", str(ROOT), str(path))
+    sh("git", "checkout", "-q", "-b", f"delegate/{name}", cwd=path)
+    (path / ".git" / "info" / "exclude").write_text("\n".join(LOCAL_FILES) + "\n")
 
     (path / "opencode.json").write_text(json.dumps(POLICY, indent=1))
     runner = path / "run-tests"
@@ -110,21 +112,43 @@ def start(name: str, minutes: int) -> int:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SCOUT_", "LITELLM_"))}
     env["STRATA_API_KEY"] = key
     message = PREAMBLE + body + f"\n\nFiles you may change: {', '.join(meta['files'])}\n"
+    preflight(path, env)
+    main_before = main_state()
     log = path / ".delegate-log.jsonl"
     t0 = time.time()
     print(f"delegating {name} to Strata via opencode in {path} (limit {minutes} min)…", flush=True)
     with open(log, "w") as out:
-        proc = subprocess.Popen([OPENCODE, "run", "--auto", "--format", "json", "--title", f"delegate {name}", message],
+        proc = subprocess.Popen([OPENCODE, "run", "--standalone", "--auto", "--format", "json",
+                                 "--title", f"delegate {name}", message],
                                 cwd=path, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             code = proc.wait(timeout=minutes * 60)
         except subprocess.TimeoutExpired:
             proc.kill()
             code = "timeout"
-    result = {"name": name, "exit": code, "minutes": round((time.time() - t0) / 60, 1)}
+    escaped = main_state() != main_before
+    result = {"name": name, "exit": code, "minutes": round((time.time() - t0) / 60, 1), "escaped": escaped}
     (path / ".delegate-result.json").write_text(json.dumps(result))
     print(json.dumps(result))
     return check(name)
+
+
+def main_state() -> str:
+    """Status plus contents of every changed file in the main checkout, to detect writes from outside."""
+    status = sh("git", "status", "--porcelain", "--untracked-files=all")
+    digest = [status]
+    for line in status.splitlines():
+        f = ROOT / line[3:].split(" -> ")[-1]
+        if f.is_file():
+            digest.append(f"{f}:{f.stat().st_mtime_ns}:{f.stat().st_size}")
+    return "\n".join(digest)
+
+
+def preflight(path: Path, env: dict) -> None:
+    """opencode must report the clone's own opencode.json among its config sources."""
+    r = subprocess.run([OPENCODE, "--standalone", "debug", "config"], cwd=path, env=env, capture_output=True, text=True)
+    if str((path / "opencode.json").resolve()) not in r.stdout and str(path / "opencode.json") not in r.stdout:
+        raise SystemExit("preflight failed: opencode did not load the clone's opencode.json policy; not running")
 
 
 def changed_files(path: Path) -> list[str]:
@@ -137,7 +161,7 @@ def check(name: str) -> int:
     meta, _ = load_spec(name)
     path = wt(name)
     if not path.exists():
-        raise SystemExit(f"no worktree for {name}")
+        raise SystemExit(f"no clone for {name}")
     files = changed_files(path)
     outside = [f for f in files if not any(fnmatch.fnmatch(f, g) for g in meta["files"])]
     tests = subprocess.run([str(path / "run-tests")], cwd=path, capture_output=True, text=True)
@@ -147,7 +171,10 @@ def check(name: str) -> int:
     print(f"tests: {'PASS' if tests.returncode == 0 else 'FAIL'} — {last}")
     for denied in _denied_attempts(path):
         print(f"denied by policy: {denied}")
-    ok = bool(files) and not outside and tests.returncode == 0
+    result = json.loads((path / ".delegate-result.json").read_text()) if (path / ".delegate-result.json").exists() else {}
+    if result.get("escaped"):
+        print("ESCAPE: the main checkout changed during the run. Inspect `git status` there; nothing is merged.")
+    ok = bool(files) and not outside and tests.returncode == 0 and not result.get("escaped")
     print("CHECK", "OK" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -179,8 +206,7 @@ def merge(name: str) -> int:
 def drop(name: str) -> int:
     path = wt(name)
     if path.exists():
-        sh("git", "worktree", "remove", "--force", str(path))
-    sh("git", "branch", "-D", f"delegate/{name}", check=False)
+        shutil.rmtree(path)
     print(f"dropped {name}")
     return 0
 
