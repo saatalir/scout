@@ -106,7 +106,10 @@ def make_copy(name: str) -> Path:
 def run_tests(copy: Path, tests: list[str]) -> tuple[bool, str]:
     cmd = ["sandbox-exec", "-p", sandbox_profile(copy), str(PYTHON), "-m", "pytest", "-q", "-p", "no:cacheprovider",
            *tests]
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(copy), "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(copy), "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1",
+           # browser tests: the installed Chromium, read-only (HOME is the copy, so Playwright would not find it)
+           "PLAYWRIGHT_BROWSERS_PATH": str(Path.home() / "Library" / "Caches" / "ms-playwright"),
+           "SCOUT_IN_SANDBOX": "1"}                   # local Chromium runs with --no-sandbox inside this one
     try:
         r = subprocess.run(cmd, cwd=copy, capture_output=True, text=True, env=env, timeout=600)
     except subprocess.TimeoutExpired:

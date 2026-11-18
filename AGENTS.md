@@ -39,7 +39,8 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/tools/web.py` | Tier 2: page → Markdown; downloads verified by type, size and PDF title | `fetch_page()`, `download_file()`, `pdf_text()` |
 | `scout/approvals.py` | Approval policy for irreversible actions: ask / auto / deny, domain allowlist, payments switch | `ApprovalPolicy.from_env()`, `.decide()` |
 | `scout/browser/page.py` | Page model: visible interactive elements with stable ids, labels, forms, banners; password values never read | `snapshot(page)`, `PageView.for_model()`, `locator_for()` |
-| `scout/browser/agent_tools.py` | Browser tools for the agent (open, read, click, type, select, scroll, back, screenshot, download, click_submit) on one session per task; gates in code; follows new tabs and popups; declines confirm dialogs except in an approved click_submit; downloads are caught from the browser, never fetched by Playwright's request API (it would bypass the VM and Tor) | `BROWSER_TOOLS`, `BrowserRunner` |
+| `scout/browser/agent_tools.py` | Browser tools for the agent (open, read, click, type, select, scroll, back, screenshot, download, click_submit) on one session per task; gates in code; follows new tabs and popups; declines confirm dialogs except in an approved click_submit; downloads are caught from the browser, never fetched by Playwright's request API (it would bypass the VM and Tor); a remote browser saves them on the VM (set over CDP) and Scout copies them back over SSH | `BROWSER_TOOLS`, `BrowserRunner` |
+| `scout/playbooks.py`, `playbooks/*.yaml` | B5: known site flows as YAML steps (open, type, select, check, click, submit, expect, wait, fuzzy); elements found by label; run through the same browser tools and gates; a failed or fuzzy step hands the page back to the model; traces of successful runs (`trace.yaml` in the task folder) | `run_playbook()`, `matching()`, `find_element()`, `trace_from_actions()` |
 | `scout/resilience.py` | R1/R3 primitives: transient vs permanent errors, `RetryPolicy`, `Retry-After`, per-host `CircuitBreaker`, `RetryTransport` (under all tool HTTP), `Deadline`, `run_with_time_limit`, `SCOUT_CHAOS_DOWN` fault injection | `is_transient()`, `RetryPolicy.call()`, `RetryTransport` |
 | `scout/verify.py` | Claims in the report checked against saved sources (extractor role) | `verify_report(llm, report, files)` |
 | `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
@@ -130,6 +131,7 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_BROWSERS_FILE` | path | Alternative to `config/browsers.yaml` |
 | `SCOUT_LIBRARY_DIR` | path | The knowledge library's inbox (default `./library-inbox`) |
 | `SCOUT_TASKS_DIR` | path | Task records (default `./tasks`) |
+| `SCOUT_PLAYBOOKS_DIR` | path | Playbooks (default `./playbooks`) |
 | `SCOUT_APPROVALS` | `ask` / `auto` / `deny` | Who approves irreversible actions (§3 rule 5); `scout run --approvals` overrides per task |
 | `SCOUT_AUTO_APPROVE_DOMAINS`, `SCOUT_AUTO_APPROVE_PAYMENTS` | comma list / `yes`/`no` | Limits on `auto` approvals |
 | `SCOUT_CHAOS_DOWN` | comma list of hosts | **Tests and evals only:** makes those hosts unreachable (fault injection, eval task r12) |

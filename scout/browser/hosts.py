@@ -133,6 +133,10 @@ def browser_args(profile: Profile, port: int, data_dir: Path) -> list[str]:
         args.append("--use-mock-keychain")
     if profile.headless:
         args.append("--headless=new")
+    if os.environ.get("SCOUT_IN_SANDBOX") == "1" and profile.host.kind == "local":
+        # Set only by scripts/delegate.py, whose sandbox-exec already confines the browser: macOS cannot
+        # nest Chromium's own sandbox inside it (the page process crashes).
+        args.append("--no-sandbox")
     if profile.proxy:
         args.append(f"--proxy-server={profile.proxy}")
     if profile.extensions:
@@ -253,3 +257,26 @@ async def start_profile(profile: Profile, chromium_path: str | None = None) -> E
     if profile.host.kind == "local":
         return await start_local(profile, chromium_path)
     return await start_ssh(profile)
+
+
+# -- files on a remote host (browser downloads) -------------------------------
+
+async def ssh_run(profile: Profile, argv: list[str], *, timeout: float = 120.0,
+                  max_bytes: int | None = None) -> bytes:
+    """Run one command on the profile's SSH host (Scout's key, BatchMode); return its stdout.
+    Used for browser downloads: the browser saves the file on the VM, Scout copies it back over SSH."""
+    host = profile.host
+    proc = await asyncio.create_subprocess_exec(
+        "ssh", *SSH_OPTS, *host.ssh_opts, host.target, shlex.join(argv),
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise BrowserHostError(f"ssh {host.target} {argv[0]} timed out after {timeout:.0f}s") from None
+    if proc.returncode != 0:
+        raise BrowserHostError(f"ssh {host.target} {argv[0]} failed (exit {proc.returncode}): "
+                               f"{err.decode(errors='replace').strip()[-300:]}")
+    if max_bytes is not None and len(out) > max_bytes:
+        raise BrowserHostError(f"the file is larger than {max_bytes // 1_000_000} MB")
+    return out

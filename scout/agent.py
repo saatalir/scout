@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import httpx
 
+from . import playbooks
 from .approvals import ApprovalPolicy
 from .library import Item, find_existing, read_front_matter, save_item
 from .llm import LLM
@@ -116,7 +117,13 @@ TOOLS = [
 # Tier 3: the real browser (Phase 2). Gates for submitting and passwords are enforced inside these tools.
 from .browser.agent_tools import BROWSER_TOOL_NAMES, BROWSER_TOOLS, BrowserRunner  # noqa: E402
 
-TOOLS = TOOLS[:-3] + BROWSER_TOOLS + TOOLS[-3:]          # keep request_approval, hand_to_human, finish last
+PLAYBOOK_TOOL = _tool(
+    "run_playbook", "Run a known site flow (a playbook Scout named for this objective) in the browser, all steps in "
+    "one call: open, fill, submit (submits still ask for approval). Give the params from the objective. If it stops "
+    "at a step, continue by hand from the page it returns; do not start over.",
+    {"playbook": {"type": "string", "description": "The playbook's name."},
+     "params": {"type": "object", "description": "Values the playbook asks for."}})
+TOOLS = TOOLS[:-3] + BROWSER_TOOLS + [PLAYBOOK_TOOL] + TOOLS[-3:]   # keep request_approval, hand_to_human, finish last
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
 SYSTEM = """You are Online Scout, a local-first web research agent. You complete the user's objective with tools.
@@ -144,7 +151,7 @@ How to work
   "Reject all", "Decline" or similar). Submit forms and press anything that commits (submit, send, pay, order,
   apply, delete) only with click_submit, which asks the human. Never type passwords: use hand_to_human.
   A file behind a signed-in page: browser_download (click its link). A click that opens a new tab continues
-  there; browser_back returns.
+  there; browser_back returns. When Scout names a playbook for the objective, start with run_playbook.
 - Try hard. When a step fails, do not give up: use the alternatives — another source (openalex, crossref,
   arxiv), another URL (the paper's DOI or landing page, arXiv), web_search, a broader or simpler query.
   Network errors were already retried for you; read the error and change something before trying again.
@@ -184,7 +191,7 @@ MODEL_OUTAGE_MINUTES = 10          # keep retrying an unreachable model this lon
 SUB_PARALLEL = 2                   # Strata answers about two requests at once (measured)
 SUB_STEPS, SUB_MINUTES = 15, 15    # budget per research sub-agent
 SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human",  # sub-agents report, never hand off,
-                *BROWSER_TOOL_NAMES)                                       # and research without the browser
+                *BROWSER_TOOL_NAMES, "run_playbook")                       # and research without the browser
 
 
 class ModelUnavailable(RuntimeError):
@@ -430,6 +437,25 @@ class Scout:
             self.rec.state["browser_url"] = self._browser.page.url      # where to pick up after a hand-off
         return out
 
+    def _playbook(self, a: dict) -> Any:
+        """B5: a known flow, step by step through the same browser tools (and gates) as the model's own calls."""
+        pb = playbooks.find_playbook(str(a.get("playbook") or a.get("name") or ""))
+        if pb is None:
+            names = [p.name for p in playbooks.load_playbooks()]
+            return {"error": f"no playbook named {a.get('playbook') or a.get('name')!r}; known: {', '.join(names) or 'none'}"}
+        params = a.get("params") or {}
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except ValueError:
+                return {"error": "params must be an object of the values the playbook asks for",
+                        "params": pb.for_model()["params"]}
+        out = playbooks.run_playbook(pb, params, call=self._browser_call, view=lambda: self.browser.view)
+        self.rec.state.setdefault("playbooks", []).append(
+            {"name": pb.name, "params": params, "log": out.get("log", []), "done": bool(out.get("done")),
+             "failed_step": out.get("failed_step")})
+        return out
+
     def _register(self, d: Any) -> Any:
         """A browser download, kept like download_file's: unverified files are deleted, duplicates detected."""
         if not isinstance(d, web.Download):
@@ -485,6 +511,8 @@ class Scout:
             return self._subtasks(a)
         if name in BROWSER_TOOL_NAMES:
             return self._browser_call(name, a)
+        if name == "run_playbook":
+            return self._playbook(a)
         raise ValueError(f"unknown tool {name!r}; tools: {', '.join(TOOL_NAMES)}")
 
     def _run_sub(self, n: int, question: str) -> dict:
@@ -642,6 +670,14 @@ class Scout:
         if not rec.messages:
             rec.messages = [{"role": "system", "content": SYSTEM},
                             {"role": "user", "content": rec.objective}]
+            if any(t["function"]["name"] == "run_playbook" for t in self.tools):
+                found = playbooks.matching(rec.objective)
+                if found:
+                    rec.messages.append({"role": "user", "content": (
+                        "[Scout] A playbook (a tested flow for this site) matches this objective: "
+                        + json.dumps([p.for_model() for p in found], ensure_ascii=False)
+                        + ". Start with run_playbook, giving the params from the objective. If it stops, continue "
+                          "by hand from where it stopped.")})
         self._repair_transcript()
         if rec.status == "needs_human" and rec.state.get("handed_over"):
             # B4: the person did what was handed over (a sign-in, a CAPTCHA, a two-factor prompt); carry on.
@@ -687,6 +723,11 @@ class Scout:
                           f"Run `python -m scout resume {rec.id}` when it is back.")
             self.notify(rec.report)
         finally:
+            if self._browser is not None and rec.status == "done" and self._browser.actions:
+                try:                                   # B5: a trace of what worked, for promotion into playbooks
+                    playbooks.write_trace(rec.dir / "trace.yaml", self._browser.actions, rec.objective)
+                except Exception:  # noqa: BLE001
+                    pass
             if self._browser is not None:
                 try:
                     self._browser.close()

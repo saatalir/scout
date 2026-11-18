@@ -172,7 +172,10 @@ def download_file(client: httpx.Client, url: str, dest_dir: Path, *, filename: s
 
 def safe_name(name: str | None, kind: str) -> str:
     name = re.sub(r"[^\w.\-]+", "_", name or "").strip("._") or "download"
-    if kind in EXT and not name.lower().endswith(EXT[kind]):
+    has_ext = re.search(r"\.[A-Za-z0-9]{1,5}$", name) is not None
+    if kind in ("csv", "text", "json") and has_ext:
+        pass                                   # text sniffing is weak: notes.txt stays notes.txt
+    elif kind in EXT and not name.lower().endswith(EXT[kind]):
         name += EXT[kind]
     return name[:120]
 
@@ -188,8 +191,8 @@ def verify_bytes(data: bytes, url: str, ctype: str, name: str, dest_dir: Path, *
     if len(data) > MAX_BYTES:
         return Download(url=url, path=None, bytes=len(data), content_type=ctype, kind="binary", verified=False,
                         problems=[f"too large: over {MAX_BYTES} bytes"])
-    if len(data) < MIN_BYTES:
-        problems.append(f"too small: {len(data)} bytes")
+    if not data or (len(data) < MIN_BYTES and expected_kind != "any"):
+        problems.append(f"too small: {len(data)} bytes")      # tiny files are usually error notes, unless any file was asked for
     if kind == "html":
         problems.append("got an HTML page, not a file (a landing, login or paywall page?)")
     if expected_kind and expected_kind != "any" and kind != expected_kind:

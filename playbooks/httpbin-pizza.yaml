@@ -1,0 +1,30 @@
+# Eval task f01: httpbin's demo pizza form (an HTML5-spec example). The submit asks for approval.
+name: httpbin-pizza
+description: Order a pizza on httpbin's demo form (name, phone, e-mail, size, toppings, time, instructions).
+match:
+  urls: ["httpbin.org/forms/post"]
+params:
+  custname: {description: "customer name", required: true}
+  phone: {description: "telephone number"}
+  email: {description: "e-mail address"}
+  size: {description: "pizza size", enum: [small, medium, large], required: true}
+  toppings: {description: "toppings, any of bacon, extra cheese, onion, mushroom", type: list}
+  delivery: {description: "preferred delivery time, HH:MM between 11:00 and 21:00"}
+  comments: {description: "delivery instructions"}
+steps:
+  - open: https://httpbin.org/forms/post
+  - type: {field: "Customer name", text: "{custname}"}
+  - type: {field: "Telephone", text: "{phone}"}
+    optional: true
+  - type: {field: "E-mail address", text: "{email}"}
+    optional: true
+  - check: {field: "{size}"}
+  - check: {field: "{item}"}
+    for_each: toppings
+  - type: {field: "Preferred delivery time", text: "{delivery}"}
+    optional: true
+  - type: {field: "Delivery instructions", text: "{comments}"}
+    optional: true
+  - submit: {element: "Submit order", summary: "Submit the pizza order for {custname} on httpbin.org"}
+  - expect: {text: "custname"}
+  - fuzzy: "The order was submitted. Report what the site returned (the echoed form fields), then finish."

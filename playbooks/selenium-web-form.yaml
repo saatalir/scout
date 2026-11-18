@@ -1,0 +1,19 @@
+# Eval task f03: Selenium's demo web form. The submit asks for approval.
+name: selenium-web-form
+description: Fill in Selenium's demo web form (text input, textarea, dropdown) and submit it.
+match:
+  urls: ["selenium.dev/selenium/web/web-form.html"]
+params:
+  text: {description: "text for the 'Text input' field", required: true}
+  textarea: {description: "text for the 'Textarea' field"}
+  option: {description: "dropdown option", enum: [One, Two, Three]}
+steps:
+  - open: https://www.selenium.dev/selenium/web/web-form.html
+  - type: {field: "Text input", text: "{text}"}
+  - type: {field: "Textarea", text: "{textarea}"}
+    optional: true
+  - select: {field: "Dropdown (select)", option: "{option}"}
+    optional: true
+  - submit: {element: "Submit", summary: "Submit Selenium's demo web form"}
+  - expect: {text: "Received"}
+  - fuzzy: "The form was submitted. Report the page's confirmation text, then finish."

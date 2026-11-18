@@ -248,3 +248,13 @@ def test_failed_download_without_a_title_says_to_retry_with_one():
     scout(TaskRecord.create("Download it.", tor=False), llm, h=h).run()
     result = json.loads(next(m["content"] for m in llm.seen[1] if m["role"] == "tool"))
     assert not result["verified"] and "expected_title" in result["next"]
+
+
+def test_text_files_keep_their_extension_and_small_any_files_pass(tmp_path):
+    from scout.tools import web
+    assert web.safe_name("file_1.txt", "csv") == "file_1.txt" and web.safe_name("data", "csv") == "data.csv"
+    assert web.safe_name("report", "pdf") == "report.pdf"
+    small = web.verify_bytes(b"Hello, World!\n", "https://x/f.txt", "", "f.txt", tmp_path, expected_kind="any")
+    assert small.verified
+    assert not web.verify_bytes(b"Not found\n", "https://x/f.pdf", "", "f.pdf", tmp_path, expected_kind="pdf").verified
+    assert not web.verify_bytes(b"", "https://x/f", "", "f", tmp_path, expected_kind="any").verified

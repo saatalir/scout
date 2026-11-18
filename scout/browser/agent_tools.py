@@ -18,8 +18,9 @@ answered safely: alerts acknowledged, confirms and prompts declined, except
 during an approved click_submit, whose confirmation dialog is accepted.
 
 Downloads (B2): browser_download clicks an element and catches the browser's
-own download, so a signed-in session's files can be fetched; the file is
-streamed back from the VM and passes the same checks as download_file. A URL is
+own download, so a signed-in session's files can be fetched. A remote browser
+saves it in a folder on its own host (set over CDP), and Scout copies it back
+over SSH; it passes the same checks as download_file. A URL is
 never fetched by Playwright's request API: that would leave from this machine,
 not the browser's network (and not through Tor).
 """
@@ -38,6 +39,7 @@ from playwright.async_api import Error as PWError
 from playwright.async_api import TimeoutError as PWTimeout
 
 from ..tools import web
+from . import hosts
 from .config import BrowserConfig, load_browser_config
 from .page import PageView, locator_for, snapshot
 from .session import open_browser
@@ -47,6 +49,9 @@ SUBMIT_WORDS = re.compile(
     r"publish|post|book|reserve|subscribe|place order|transfer|accept terms)\b", re.I)
 NAV_TIMEOUT_MS = 45000
 DOWNLOAD_WAIT_S = 60          # a download can take a while to start (generated reports)
+DOWNLOAD_DONE_S = 150         # and to finish
+REMOTE_DOWNLOADS = "/tmp/scout-downloads"     # on the VM; one folder per profile, emptied after each copy
+MAX_DOWNLOAD_BYTES = 200_000_000
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -109,6 +114,10 @@ class BrowserRunner:
         self._watched: set[int] = set()
         self.dialogs: list[str] = []
         self.accept_confirms = False
+        self.actions: list[dict] = []                # successful actions, by element label (B5 traces)
+        self.remote_dir: str | None = None           # a remote browser saves downloads here, on its own host
+        self._remote: dict[str, dict] = {}           # download guid -> {url, name, state}
+        self._remote_order: list[str] = []
 
     def _watch(self, page) -> None:
         """Listen for popups, dialogs and downloads on a page, and at once on every popup it opens (a link may
@@ -151,9 +160,57 @@ class BrowserRunner:
                     open_browser(self.profile, self.config or load_browser_config()))
                 if self.setup:
                     await self.setup(self.session.context)
+                if self.session.profile.host.kind != "local":
+                    await self._remote_downloads()
             self.page = await self.session.new_page()
             self._watch(self.page)
         return self.page
+
+    async def _remote_downloads(self) -> None:
+        """Attached over CDP, Playwright would tell a remote browser to save downloads in a folder of *this*
+        machine, which does not exist there (the download is canceled). So the browser saves them in a folder on
+        its own host, and the file is copied back over SSH: it still came through the browser's network (and Tor)."""
+        profile = self.session.profile
+        self.remote_dir = f"{REMOTE_DOWNLOADS}/{profile.name}"
+        await hosts.ssh_run(profile, ["mkdir", "-p", "-m", "700", self.remote_dir], timeout=30)
+        cdp = await self.session.browser.new_browser_cdp_session()
+        await cdp.send("Browser.setDownloadBehavior", {"behavior": "allowAndName", "downloadPath": self.remote_dir,
+                                                       "eventsEnabled": True})
+
+        def begin(e):
+            self._remote[e["guid"]] = {"url": e.get("url", ""), "name": e.get("suggestedFilename") or "download",
+                                       "state": "inProgress"}
+            self._remote_order.append(e["guid"])
+
+        def progress(e):
+            if e.get("guid") in self._remote:
+                self._remote[e["guid"]]["state"] = e.get("state", "inProgress")
+        cdp.on("Browser.downloadWillBegin", begin)
+        cdp.on("Browser.downloadProgress", progress)
+        self._cdp = cdp
+
+    async def _fetch_remote(self, guid: str) -> tuple[bytes, str, str] | dict:
+        """Wait for a remote download to finish, copy it back over SSH and delete it on the host."""
+        info = self._remote[guid]
+        t0 = time.monotonic()
+        while info["state"] == "inProgress" and time.monotonic() - t0 < DOWNLOAD_DONE_S:
+            await asyncio.sleep(0.25)
+        if info["state"] != "completed":
+            return {"error": f"the download did not complete ({info['state']})"}
+        if not re.fullmatch(r"[A-Za-z0-9-]+", guid):
+            return {"error": "unexpected download id from the browser"}
+        path = f"{self.remote_dir}/{guid}"
+        profile = self.session.profile
+        try:
+            data = await hosts.ssh_run(profile, ["cat", "--", path], timeout=180, max_bytes=MAX_DOWNLOAD_BYTES)
+        except hosts.BrowserHostError as e:
+            return {"error": f"could not copy the download back from {profile.host.name}: {e}"}
+        finally:
+            try:
+                await hosts.ssh_run(profile, ["rm", "-f", "--", path], timeout=30)
+            except hosts.BrowserHostError:
+                pass
+        return data, info["name"], info["url"]
 
     async def _follow_popup(self, out: dict) -> dict:
         """B3: a click opened a new tab or popup: continue there (the opener stays open for browser_back)."""
@@ -242,6 +299,15 @@ class BrowserRunner:
 
     # -- tool entry points (sync) ------------------------------------------------------------------
     def call(self, name: str, a: dict, approve: Callable[[str], bool]) -> Any:
+        el = self.view.element(str(a.get("element_id", "")).strip()) if self.view and "element_id" in a else None
+        out = self._call(name, a, approve)
+        ok = not (isinstance(out, dict) and (out.get("error") or out.get("decision") == "denied"))
+        if ok and name not in ("browser_read", "browser_screenshot", "browser_scroll"):
+            self.actions.append({"tool": name, "args": dict(a), "label": el.name if el else None,
+                                 "kind": (el.type or el.role) if el else None})
+        return out
+
+    def _call(self, name: str, a: dict, approve: Callable[[str], bool]) -> Any:
         if name == "browser_open":
             return self.run(self._goto(a["url"]))
         if name == "browser_read":
@@ -302,6 +368,7 @@ class BrowserRunner:
             return {"error": f"element {eid} is no longer on the page (it changed): call browser_read"}
         before = page.url
         self._downloads.clear()
+        self._remote_order.clear()
         try:
             await loc.click(timeout=15000)
         except PWTimeout:
@@ -309,32 +376,41 @@ class BrowserRunner:
         except PWError as e:
             return {"error": f"browser error on {eid}: {str(e).splitlines()[0][:200]}"}
         t0 = time.monotonic()
-        while not self._downloads and time.monotonic() - t0 < DOWNLOAD_WAIT_S:
+        started = (lambda: self._remote_order) if self.remote_dir else (lambda: self._downloads)
+        while not started() and time.monotonic() - t0 < DOWNLOAD_WAIT_S:
             await asyncio.sleep(0.25)
             opened = page.url != before or any(not p.is_closed() for _, p in self._popups)
             if opened and time.monotonic() - t0 > 5:      # a normal page opened: no download is coming
                 break
-        if not self._downloads:
+        if not started():
             out = await self._follow_popup(await self._read())
             url = self.page.url if self.page else before
             hint = (f" The browser opened {url} instead; if that is the file, use download_file with that URL."
                     if url != before else "")
             return {"error": f"clicking {eid} started no download.{hint}", **out}
-        dl = self._downloads.pop(0)
         self._popups.clear()                           # a tab opened only for the download is not followed
         dest = self.downloads_dir or Path(".")
         dest.mkdir(parents=True, exist_ok=True)
-        tmp = dest / f".browser-download-{int(time.time() * 1000)}"
-        try:
-            await dl.save_as(tmp)                      # streamed back from the VM when the browser is remote
-            data = tmp.read_bytes()
-        except PWError as e:
-            return {"error": f"the download failed: {str(e).splitlines()[0][:200]}"}
-        finally:
-            tmp.unlink(missing_ok=True)
+        if self.remote_dir:
+            got = await self._fetch_remote(self._remote_order.pop(0))
+            self._downloads.clear()                    # Playwright's own objects for it cannot be saved here
+            if isinstance(got, dict):
+                return got
+            data, suggested, url = got
+        else:
+            dl = self._downloads.pop(0)
+            tmp = dest / f".browser-download-{int(time.time() * 1000)}"
+            try:
+                await dl.save_as(tmp)
+                data = tmp.read_bytes()
+            except PWError as e:
+                return {"error": f"the download failed: {str(e).splitlines()[0][:200]}"}
+            finally:
+                tmp.unlink(missing_ok=True)
+            suggested, url = dl.suggested_filename, dl.url
         kind = web.sniff_kind(data[:4096], "")
-        name = web.safe_name(a.get("filename") or dl.suggested_filename, kind)
-        return web.verify_bytes(data, dl.url, "", name, dest, kind=kind, expected_title=a.get("expected_title"),
+        name = web.safe_name(a.get("filename") or suggested, kind)
+        return web.verify_bytes(data, url, "", name, dest, kind=kind, expected_title=a.get("expected_title"),
                                 expected_kind=a.get("expected_kind"))
 
     async def _back(self) -> dict:
