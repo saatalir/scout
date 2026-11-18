@@ -12,3 +12,4 @@ config/litellm.generated.yaml
 deploy/browser-vm/authorized_keys
 /tasks/
 /library-inbox/
+/playbooks/proposed/

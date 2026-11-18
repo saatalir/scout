@@ -72,7 +72,18 @@ def main(argv: list[str] | None = None) -> int:
     show = sub.add_parser("show", help="print a task record")
     show.add_argument("task_id")
     sub.add_parser("list", help="list tasks")
+    pro = sub.add_parser("promote", help="propose playbooks from flows that succeeded at least --min times (D4)")
+    pro.add_argument("--min", type=int, default=2, dest="min_runs")
     a = ap.parse_args(argv)
+
+    if a.cmd == "promote":
+        from . import promote
+        paths = promote.promote(min_runs=a.min_runs)
+        for p in paths:
+            print(f"proposed: {p}")
+        print(f"{len(paths)} proposal(s)." + (" Review each, then move it up into the playbooks folder to activate it."
+                                               if paths else " No flow has enough successful runs yet."))
+        return 0
 
     if a.cmd == "list":
         for tid in TaskRecord.list_ids():

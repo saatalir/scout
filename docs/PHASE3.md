@@ -71,7 +71,24 @@ lingering, builds the image as `scout` and runs a start/stop smoke test.
 
 ## 4. Playbook promotion (D4)
 
-See §6 once merged.
+`scout/promote.py`, `python -m scout promote [--min 2]`. Every task that finishes `done` leaves its browser actions
+in `trace.yaml` (Phase 2, B5). Promotion groups the traces by **flow** (the first URL plus the shape of the steps:
+which fields were typed or selected, what was clicked and submitted; a run of ticked boxes counts as one step) and
+turns every flow with at least `--min` successful runs into a **proposed** playbook in `playbooks/proposed/`:
+
+- a value that differed between runs becomes a required param; a set of ticked boxes that differed becomes one
+  list param (`choices`) with a `for_each` step;
+- **every typed value becomes a param**, even one that was the same in every run (it may be the user's own
+  phone number or address); such a param is optional. No typed value and no objective text from a trace is written
+  into a proposal, and `playbooks/proposed/` is git-ignored;
+- a flow an active playbook already covers is skipped.
+
+Nothing proposed is active: `load_playbooks` reads only the playbooks folder itself. A human reviews the file (which
+params are required, the literal values left, the submit summary) and moves it up to activate it.
+
+Live check (2026-11-18): the traces of the G2 runs gave two proposals (the f01 and f03 flows). With only the
+promoted f01 proposal in the playbooks folder, f01 passed in 3 steps from it, the submit asking for approval first.
+The proposal marked the customer name optional (it was the same in every eval run), which is what review is for.
 
 ## 5. Tests
 
@@ -79,8 +96,12 @@ See §6 once merged.
 check after it, missing targets, submit approval, Enter in a form, passwords, CAPTCHAs, the agent reading a canvas)
 and `tests/test_desktop.py` (the real helper through `tests/fake_ssh.py`, `tests/fake_podman.py` for podman:
 isolation flags, the round trip, argv-only typing, bad input refused, vision gates on the desktop, copy-out on
-close, clean-up when the task ends, Tor refusal, a VM without the desktop).
+close, clean-up when the task ends, Tor refusal, a VM without the desktop) and `tests/test_promote.py` (flows,
+params, check runs, selects, replay through `run_playbook`, writing and skipping, no typed values kept).
 
 ## 6. Results
 
-See below once the live checks and G3 have run.
+Live, 2026-11-18, before G3: v01 (canvas chart) passed: the page result flagged the canvas, `vision_look` read
+January to July, and the agent cross-checked the sample's source. v02 passed without vision: its download button is
+a link to the file. f01 from a promoted playbook passed (§4). The desktop round trip runs offline; live once
+`setup.sh` has installed podman and the image on the VM.

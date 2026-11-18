@@ -21,6 +21,7 @@ A local-first web agent. It researches a topic and downloads papers and data, or
 | 0 — feasibility | Connect to Strata; measure whether the local model can carry each agent role | **Done.** The eval gate passes for planner, browser, vision and extractor ([SETUP §9](docs/SETUP.md#9-reference-results)). |
 | Browser layer (Phase 2 work, built early) | Browser profiles on a VM, search with engine fallback, Tor on/off | **Done and verified live.** |
 | 2 — Browser | Page model, browser tools with approval and password gates, downloads, popups, hand-off and resume, playbooks, cookie-banner declining | **Gate G2 passed** (96 % over 3 repeats, 2026-11-18) ([docs/PHASE2.md](docs/PHASE2.md)). |
+| 3 — Vision and desktop | Vision on the browser page (read and act on drawn content, with every gate), a disposable desktop on the VM (rootless podman), playbook promotion from traces | **Built**; v01, v02 and a promoted f01 pass live; the desktop needs `setup.sh` rerun on the VM; gate G3 next ([docs/PHASE3.md](docs/PHASE3.md)). |
 | 1 — Research Scout | Task record, academic APIs, fetch/download with verification, library hand-off, planner loop, CLI, fixed task eval set, parallel sub-agents | **Gate passed** (96 % over 3 repeats, [docs/PHASE1.md §6](docs/PHASE1.md#6-results)). Parallel sub-agents and claim verification are built; the knowledge-library hand-off waits for the real library inbox. |
 
 ## Architecture
@@ -74,6 +75,8 @@ docs/SETUP.md           the setup guide
 docs/STRATA.md          serving the model with Strata and publishing it on the tailnet
 docs/PHASE1.md          Phase 1: how a task runs, the library contract, the task eval set and its results
 docs/PHASE2.md          Phase 2: the browser tier, downloads, playbooks, cookie banners
+docs/PHASE3.md          Phase 3: vision, the disposable desktop, playbook promotion
+deploy/desktop/         the desktop container image (built on the VM by setup.sh)
 results/                eval output (not committed)
 tasks/, library-inbox/  task records and the default library inbox (not committed)
 ```
