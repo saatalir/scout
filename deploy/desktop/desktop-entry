@@ -1,0 +1,21 @@
+#!/bin/sh
+# Starts the virtual screen, window manager, VNC (container loopback), noVNC on :6080 (published by podman to
+# the VM's 127.0.0.1 only) and Chromium on $SCOUT_URL. Chromium's own sandbox cannot run inside a rootless
+# container; the container is the sandbox: no capabilities, no new privileges, read-only root, no access to the
+# VM's loopback services.
+set -eu
+GEOMETRY="${SCOUT_GEOMETRY:-1280x800}"
+W="${GEOMETRY%x*}"; H="${GEOMETRY#*x}"
+mkdir -p "$HOME/Downloads" "$HOME/.chromium/Default"
+cat > "$HOME/.chromium/Default/Preferences" <<JSON
+{"download": {"default_directory": "$HOME/Downloads", "prompt_for_download": false},
+ "browser": {"has_seen_welcome_page": true}, "profile": {"default_content_setting_values": {"notifications": 2}}}
+JSON
+Xvfb :1 -screen 0 "${GEOMETRY}x24" -nolisten tcp >/tmp/xvfb.log 2>&1 &
+i=0; until xdotool getdisplaygeometry >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 100 ] && exit 1; sleep 0.1; done
+openbox >/tmp/openbox.log 2>&1 &
+x11vnc -display :1 -localhost -rfbport 5900 -forever -shared -nopw -quiet >/tmp/vnc.log 2>&1 &
+websockify --web /usr/share/novnc 0.0.0.0:6080 127.0.0.1:5900 >/tmp/novnc.log 2>&1 &
+exec chromium --no-sandbox --user-data-dir="$HOME/.chromium" --no-first-run --no-default-browser-check \
+  --disable-session-crashed-bubble --password-store=basic --window-position=0,0 --window-size="$W,$H" \
+  --start-maximized "${SCOUT_URL:-about:blank}"

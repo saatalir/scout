@@ -116,6 +116,9 @@ TOOLS = [
 ]
 # Tier 3: the real browser (Phase 2). Gates for submitting and passwords are enforced inside these tools.
 from .browser.agent_tools import BROWSER_TOOL_NAMES, BROWSER_TOOLS, BrowserRunner  # noqa: E402
+# Phase 3: vision on the current screen (the browser page, or the desktop). Its gates are in scout/vision.py.
+from .vision import VISION_TOOL_NAMES, VISION_TOOLS, VisionTools  # noqa: E402
+from .desktop import DESKTOP_TOOL_NAMES, DESKTOP_TOOLS, Desktop, desktop_name  # noqa: E402
 
 PLAYBOOK_TOOL = _tool(
     "run_playbook", "Run a known site flow (a playbook Scout named for this objective) in the browser, all steps in "
@@ -123,7 +126,7 @@ PLAYBOOK_TOOL = _tool(
     "at a step, continue by hand from the page it returns; do not start over.",
     {"playbook": {"type": "string", "description": "The playbook's name."},
      "params": {"type": "object", "description": "Values the playbook asks for."}})
-TOOLS = TOOLS[:-3] + BROWSER_TOOLS + [PLAYBOOK_TOOL] + TOOLS[-3:]   # keep request_approval, hand_to_human, finish last
+TOOLS = TOOLS[:-3] + BROWSER_TOOLS + VISION_TOOLS + DESKTOP_TOOLS + [PLAYBOOK_TOOL] + TOOLS[-3:]   # keep request_approval, hand_to_human, finish last
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
 SYSTEM = """You are Online Scout, a local-first web research agent. You complete the user's objective with tools.
@@ -152,6 +155,11 @@ How to work
   apply, delete) only with click_submit, which asks the human. Never type passwords: use hand_to_human.
   A file behind a signed-in page: browser_download (click its link). A click that opens a new tab continues
   there; browser_back returns. When Scout names a playbook for the objective, start with run_playbook.
+- Vision: when a page says "visual" (a chart, map or widget drawn rather than written), or what you need is not in
+  its elements and text, use vision_look to read the screen and vision_click / vision_type to act on what you
+  describe. Prefer element ids whenever the element is listed. Only when the real browser cannot do a step (a
+  native dialog, a plugin, a page that breaks under automation), desktop_open opens the URL in a disposable desktop;
+  the vision tools then act there, and desktop_close copies its downloads out and returns to the browser.
 - Try hard. When a step fails, do not give up: use the alternatives — another source (openalex, crossref,
   arxiv), another URL (the paper's DOI or landing page, arXiv), web_search, a broader or simpler query.
   Network errors were already retried for you; read the error and change something before trying again.
@@ -191,7 +199,7 @@ MODEL_OUTAGE_MINUTES = 10          # keep retrying an unreachable model this lon
 SUB_PARALLEL = 2                   # Strata answers about two requests at once (measured)
 SUB_STEPS, SUB_MINUTES = 15, 15    # budget per research sub-agent
 SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human",  # sub-agents report, never hand off,
-                *BROWSER_TOOL_NAMES, "run_playbook")                       # and research without the browser
+                *BROWSER_TOOL_NAMES, *VISION_TOOL_NAMES, *DESKTOP_TOOL_NAMES, "run_playbook")   # and research without the browser
 
 
 class ModelUnavailable(RuntimeError):
@@ -228,7 +236,7 @@ class Scout:
                  model_policy: RetryPolicy | None = None, tools: list[dict] | None = None,
                  save_task_id: str | None = None, verify: bool = True,
                  browser_profile: str | None = None, browser_setup: Callable[..., Any] | None = None,
-                 approvals: "ApprovalPolicy | None" = None):
+                 approvals: "ApprovalPolicy | None" = None, desktop_profile: str | None = None):
         if record.tor is None:
             raise ValueError("record.tor must be decided (ask the user) before the task runs")
         self.rec = record
@@ -248,7 +256,10 @@ class Scout:
         self.save_task_id = save_task_id or record.id        # sub-agents file items under the parent task
         self.verify = verify                                  # sub-agents skip it: the parent verifies the whole report
         self.browser_profile, self.browser_setup = browser_profile, browser_setup
+        self.desktop_profile = desktop_profile        # whose host runs the desktop (default: the search profile's)
         self._browser: BrowserRunner | None = None
+        self._vision: VisionTools | None = None
+        self._desktop: Desktop | None = None
         self.approvals = approvals or ApprovalPolicy.from_env()       # ask (default) | auto | deny
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
@@ -437,6 +448,78 @@ class Scout:
             self.rec.state["browser_url"] = self._browser.page.url      # where to pick up after a hand-off
         return out
 
+    @property
+    def vision(self) -> VisionTools:
+        if self._vision is None:
+            self._vision = VisionTools(llm=self.llm, screen=self._screen, approve=self._gate,
+                                       shots_dir=self.rec.dir / "screenshots")
+        return self._vision
+
+    def _screen(self):
+        return self._desktop.screen() if self._desktop is not None else self.browser.screen()
+
+    def _desktop_profile(self):
+        from .browser.config import load_browser_config
+        cfg = load_browser_config()
+        return cfg.profile(self.desktop_profile or cfg.search.profile)
+
+    def _desktop_call(self, name: str, a: dict) -> Any:
+        """D1: the disposable desktop. Opened per task, removed on close or when the task ends."""
+        if name == "desktop_close":
+            if self._desktop is None:
+                return {"error": "no desktop is open"}
+            files, d = [], self._desktop
+            try:
+                for f in d.files():
+                    try:
+                        data = d.fetch(f["name"])
+                    except Exception as e:  # noqa: BLE001
+                        files.append({"file": f["name"], "error": str(e)[:200]})
+                        continue
+                    kind = web.sniff_kind(data[:4096], "")
+                    got = web.verify_bytes(data, f"desktop:{d.name}/{f['name']}", "", web.safe_name(f["name"], kind),
+                                           self.rec.downloads, kind=kind, expected_kind="any")
+                    files.append({"file": f["name"], **self._register(got)})
+            finally:
+                self._close_desktop()
+            return {"closed": True, "files": files,
+                    "note": "Back on the browser. Pass a verified file's path to save_to_library." if files else
+                            "Back on the browser. The desktop downloaded no files."}
+        if self.rec.tor:
+            return {"error": "The desktop has no Tor route, and this task's Tor choice is on: Scout does not open it "
+                             "(it would leave without Tor). Use the browser (the vision tools work there too) or "
+                             "hand_to_human."}
+        url = str(a.get("url") or "")
+        if not url.startswith(("http://", "https://")):
+            return {"error": "desktop_open needs an http(s) URL"}
+        if self._desktop is not None:
+            self._close_desktop()
+        try:
+            d = Desktop(self._desktop_profile(), desktop_name(self.rec.id))
+            out = d.start(url)
+        except Exception as e:  # noqa: BLE001 - the VM may lack the desktop: say so, keep the task going
+            return {"error": f"could not open the desktop: {e}"[:400],
+                    "next": "Continue in the browser (vision tools work there), or hand_to_human."}
+        self._desktop = d
+        self.rec.state["desktop"] = {"name": d.name, "url": url}
+        return {**out, "note": "The vision tools now act on this desktop. Start with vision_look."}
+
+    def _close_desktop(self) -> None:
+        d, self._desktop = self._desktop, None
+        self.rec.state.pop("desktop", None)
+        if d is not None:
+            try:
+                d.stop()
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"could not remove the desktop {d.name}: {e}")
+
+    def _vision_call(self, name: str, a: dict) -> Any:
+        self.vision.actions = self.browser.actions        # vision steps appear in the task's trace
+        out = self.vision.call(name, a)
+        if self._browser is not None and self._browser.page is not None and not self._browser.page.is_closed():
+            self.rec.state["browser_url"] = self._browser.page.url
+        return out
+
     def _playbook(self, a: dict) -> Any:
         """B5: a known flow, step by step through the same browser tools (and gates) as the model's own calls."""
         pb = playbooks.find_playbook(str(a.get("playbook") or a.get("name") or ""))
@@ -511,6 +594,10 @@ class Scout:
             return self._subtasks(a)
         if name in BROWSER_TOOL_NAMES:
             return self._browser_call(name, a)
+        if name in VISION_TOOL_NAMES:
+            return self._vision_call(name, a)
+        if name in DESKTOP_TOOL_NAMES:
+            return self._desktop_call(name, a)
         if name == "run_playbook":
             return self._playbook(a)
         raise ValueError(f"unknown tool {name!r}; tools: {', '.join(TOOL_NAMES)}")
@@ -728,6 +815,8 @@ class Scout:
                     playbooks.write_trace(rec.dir / "trace.yaml", self._browser.actions, rec.objective)
                 except Exception:  # noqa: BLE001
                     pass
+            if self._desktop is not None:
+                self._close_desktop()                  # D1: disposable, whatever happened
             if self._browser is not None:
                 try:
                     self._browser.close()

@@ -6,6 +6,8 @@
 # Installs Brave, a virtual screen (Xvfb + fluxbox), a live view (x11vnc +
 # noVNC) and the scout-browser helper, creates the `scout` user, and turns on
 # SSH key login for `scout` and a tailnet-only HTTPS address for the live view.
+# Phase 3: rootless podman and the disposable desktop image (scout-desktop),
+# built from deploy/desktop/ as the scout user (no root-equivalent group).
 # Safe to run again: every step checks before it changes anything.
 set -euo pipefail
 
@@ -134,10 +136,33 @@ else
   echo "!! tailscale is not installed: install it and join the tailnet, then rerun this script."
 fi
 
+say "Disposable desktop (rootless podman)"
+apt-get install -y -q podman slirp4netns uidmap
+grep -q "^$SCOUT_USER:" /etc/subuid || usermod --add-subuids 200000-265535 "$SCOUT_USER"
+grep -q "^$SCOUT_USER:" /etc/subgid || usermod --add-subgids 200000-265535 "$SCOUT_USER"
+loginctl enable-linger "$SCOUT_USER"          # a user runtime dir for rootless podman, also without a login
+DESKTOP_SRC="$HERE/../desktop"
+if [[ -f "$DESKTOP_SRC/Containerfile" ]]; then
+  install -d -m 0755 /usr/local/share/scout-desktop
+  install -m 0644 "$DESKTOP_SRC/Containerfile" /usr/local/share/scout-desktop/Containerfile
+  install -m 0755 "$DESKTOP_SRC/desktop-entry" /usr/local/share/scout-desktop/desktop-entry
+  SCOUT_UID="$(id -u "$SCOUT_USER")"
+  for i in $(seq 20); do [[ -d "/run/user/$SCOUT_UID" ]] && break; sleep 0.5; done
+  (cd /tmp && sudo -u "$SCOUT_USER" XDG_RUNTIME_DIR="/run/user/$SCOUT_UID" \
+     podman build -q -t scout-desktop /usr/local/share/scout-desktop)
+else
+  echo "!! $DESKTOP_SRC/Containerfile not found: copy deploy/desktop next to deploy/browser-vm and rerun."
+fi
+
 say "Smoke test"
 sudo -u "$SCOUT_USER" scout-browser start smoke --port 9399 --browser brave --headless
 sudo -u "$SCOUT_USER" scout-browser stop smoke
 rm -rf "/home/$SCOUT_USER/profiles/smoke"
+if sudo -u "$SCOUT_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$SCOUT_USER")" podman image exists scout-desktop; then
+  (cd /tmp && sudo -u "$SCOUT_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$SCOUT_USER")" \
+     scout-browser desktop-start smoke --url about:blank && \
+   sudo -u "$SCOUT_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$SCOUT_USER")" scout-browser desktop-stop smoke)
+fi
 
 say "Done"
 echo "Live view: https://$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || hostname)/vnc.html"

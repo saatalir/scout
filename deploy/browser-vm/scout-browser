@@ -8,6 +8,16 @@ Scout runs this over SSH. Every command prints one JSON object on stdout.
     scout-browser stop research
     scout-browser status [research]
 
+Disposable desktops (Phase 3 D1; rootless podman, image scout-desktop):
+
+    scout-browser desktop-start task1 --url https://example.org [--geometry 1280x800]
+    scout-browser desktop-shot task1            # {"png_b64": ...}
+    scout-browser desktop-act task1 --click 640,400 | --type TEXT | --key enter | --scroll 3 (negative: up)
+    scout-browser desktop-files task1           # files in the desktop's Downloads
+    scout-browser desktop-fetch task1 FILE      # {"data_b64": ...}
+    scout-browser desktop-stop task1            # removes the container and everything in it
+    scout-browser desktop-list
+
 Each profile keeps its data in ~/profiles/<name>, so cookies and sign-ins
 survive restarts. The debugging port listens on 127.0.0.1 only; Scout reaches
 it through an SSH tunnel.
@@ -16,6 +26,7 @@ it through an SSH tunnel.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -170,6 +181,138 @@ def cmd_status(a) -> None:
          "profiles": {n: (state(n) or {"running": False}) for n in names}})
 
 
+# -- disposable desktops (D1) -----------------------------------------------------------------------------------
+
+PODMAN = os.environ.get("SCOUT_PODMAN", "podman")
+IMAGE = os.environ.get("SCOUT_DESKTOP_IMAGE", "scout-desktop")
+VIEW_PORTS = range(6100, 6200)                 # noVNC of each desktop, on this host's 127.0.0.1 only
+DESK_KEYS = {"enter": "Return", "tab": "Tab", "escape": "Escape", "backspace": "BackSpace", "delete": "Delete",
+             "space": "space", "pageup": "Prior", "pagedown": "Next", "home": "Home", "end": "End",
+             "arrowup": "Up", "arrowdown": "Down", "arrowleft": "Left", "arrowright": "Right"}
+FILE_RE = re.compile(r"^[^/\\\x00]{1,200}$")
+MAX_FETCH = 100_000_000
+
+
+def podman(*args: str, timeout: float = 60, binary: bool = False):
+    try:
+        r = subprocess.run([PODMAN, *args], capture_output=True, timeout=timeout)
+    except FileNotFoundError:
+        fail("podman is not installed on this host: rerun deploy/browser-vm/setup.sh (it installs the desktop)")
+    except subprocess.TimeoutExpired:
+        fail(f"podman {args[0]} timed out after {timeout:.0f}s")
+    if r.returncode != 0:
+        fail(f"podman {args[0]} failed: {r.stderr.decode(errors='replace').strip()[-300:]}")
+    return r.stdout if binary else r.stdout.decode(errors="replace")
+
+
+def desk(name: str) -> str:
+    return "scout-desk-" + check_name(name)
+
+
+def free_view_port() -> int:
+    import socket
+    for port in VIEW_PORTS:
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    fail("no free port for the desktop view (6100-6199): stop old desktops with desktop-stop")
+
+
+def cmd_desktop_start(a) -> None:
+    c = desk(a.name)
+    if not re.fullmatch(r"\d{3,4}x\d{3,4}", a.geometry):
+        fail(f"bad geometry {a.geometry!r}: use WIDTHxHEIGHT")
+    if not re.match(r"^(https?://|about:blank$)", a.url):
+        fail("the desktop opens http(s) URLs only")
+    if subprocess.run([PODMAN, "image", "exists", IMAGE], capture_output=True).returncode != 0:
+        fail(f"the {IMAGE} image is missing: rerun deploy/browser-vm/setup.sh")
+    if podman("ps", "-q", "--filter", f"name=^{c}$").strip():
+        fail(f"desktop {a.name} is already running: desktop-stop it first")
+    port = free_view_port()
+    podman("run", "-d", "--rm", "--name", c, "--label", "scout.desktop=1",
+           "--network", "slirp4netns:allow_host_loopback=false",     # no way to this host's loopback services
+           "-p", f"127.0.0.1:{port}:6080",
+           "--memory", "2g", "--cpus", "2", "--pids-limit", "1024", "--shm-size", "1g",
+           "--cap-drop", "all", "--security-opt", "no-new-privileges", "--read-only",
+           "--tmpfs", "/tmp:rw,size=512m", "--tmpfs", "/home/desk:rw,size=2g",
+           "-e", f"SCOUT_URL={a.url}", "-e", f"SCOUT_GEOMETRY={a.geometry}", IMAGE)
+    deadline = time.time() + a.wait
+    while time.time() < deadline:
+        r = subprocess.run([PODMAN, "exec", c, "xdotool", "search", "--onlyvisible", "--class", "chromium"],
+                           capture_output=True)
+        if r.returncode == 0 and r.stdout.strip():
+            w, h = a.geometry.split("x")
+            out({"ok": True, "name": a.name, "container": c, "view_port": port, "width": int(w), "height": int(h)})
+        time.sleep(0.5)
+    subprocess.run([PODMAN, "rm", "-f", "-t", "2", c], capture_output=True)
+    fail(f"the desktop's browser did not show a window within {a.wait:.0f}s")
+
+
+def cmd_desktop_shot(a) -> None:
+    png = podman("exec", desk(a.name), "import", "-silent", "-window", "root", "-depth", "8", "png:-",
+                 timeout=30, binary=True)
+    out({"ok": True, "png_b64": base64.b64encode(png).decode()})
+
+
+def cmd_desktop_act(a) -> None:
+    c = desk(a.name)
+    if a.click:
+        try:
+            x, y = (int(v) for v in a.click.split(","))
+        except ValueError:
+            fail("--click takes X,Y")
+        podman("exec", c, "xdotool", "mousemove", "--sync", str(x), str(y), "click", "1")
+    elif a.type is not None:
+        podman("exec", c, "xdotool", "type", "--delay", "25", "--", a.type, timeout=120)
+    elif a.key:
+        if a.key not in DESK_KEYS:
+            fail(f"unknown key {a.key!r}")
+        podman("exec", c, "xdotool", "key", "--clearmodifiers", DESK_KEYS[a.key])
+    elif a.scroll:
+        n = max(-20, min(20, a.scroll))
+        podman("exec", c, "xdotool", "click", "--repeat", str(abs(n)), "5" if n > 0 else "4")
+    else:
+        fail("say what to do: --click, --type, --key or --scroll")
+    time.sleep(0.4)
+    out({"ok": True})
+
+
+def cmd_desktop_files(a) -> None:
+    raw = podman("exec", desk(a.name), "find", "/home/desk/Downloads", "-maxdepth", "1", "-type", "f",
+                 "-printf", "%f\t%s\n")
+    files = []
+    for line in raw.splitlines():
+        name, _, size = line.rpartition("\t")
+        if name and not name.endswith((".crdownload", ".part")):
+            files.append({"name": name, "bytes": int(size or 0)})
+    out({"ok": True, "files": files})
+
+
+def cmd_desktop_fetch(a) -> None:
+    if not FILE_RE.match(a.file) or a.file in (".", ".."):
+        fail("bad file name")
+    data = podman("exec", desk(a.name), "cat", "--", f"/home/desk/Downloads/{a.file}", timeout=120, binary=True)
+    if len(data) > MAX_FETCH:
+        fail("the file is larger than 100 MB")
+    out({"ok": True, "name": a.file, "data_b64": base64.b64encode(data).decode()})
+
+
+def cmd_desktop_stop(a) -> None:
+    c = desk(a.name)
+    was = bool(podman("ps", "-aq", "--filter", f"name=^{c}$").strip())
+    if was:
+        podman("rm", "-f", "-t", "2", c)
+    out({"ok": True, "name": a.name, "was_running": was})
+
+
+def cmd_desktop_list(a) -> None:
+    raw = podman("ps", "--filter", "label=scout.desktop=1", "--format", "{{.Names}}")
+    out({"ok": True, "desktops": [n.removeprefix("scout-desk-") for n in raw.split()]})
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="scout-browser")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -192,6 +335,29 @@ def main() -> None:
     u = sub.add_parser("status")
     u.add_argument("profile", nargs="?")
     u.set_defaults(fn=cmd_status)
+    d = sub.add_parser("desktop-start")
+    d.add_argument("name")
+    d.add_argument("--url", required=True)
+    d.add_argument("--geometry", default="1280x800")
+    d.add_argument("--wait", type=float, default=60)
+    d.set_defaults(fn=cmd_desktop_start)
+    for cmd, fn in (("desktop-shot", cmd_desktop_shot), ("desktop-files", cmd_desktop_files),
+                    ("desktop-stop", cmd_desktop_stop)):
+        x = sub.add_parser(cmd)
+        x.add_argument("name")
+        x.set_defaults(fn=fn)
+    x = sub.add_parser("desktop-act")
+    x.add_argument("name")
+    x.add_argument("--click")
+    x.add_argument("--type")
+    x.add_argument("--key")
+    x.add_argument("--scroll", type=int)
+    x.set_defaults(fn=cmd_desktop_act)
+    x = sub.add_parser("desktop-fetch")
+    x.add_argument("name")
+    x.add_argument("file")
+    x.set_defaults(fn=cmd_desktop_fetch)
+    sub.add_parser("desktop-list").set_defaults(fn=cmd_desktop_list)
     a = ap.parse_args()
     a.fn(a)
 

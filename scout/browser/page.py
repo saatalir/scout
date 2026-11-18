@@ -76,11 +76,21 @@ SNAPSHOT_JS = r"""
       isVisible(n) && n.innerText && n.innerText.length < 3000 && bannerRe.test(n.innerText) &&
       ['fixed', 'sticky'].includes(getComputedStyle(n).position));
   const dialog = [...document.querySelectorAll('dialog[open], [role=dialog], [aria-modal=true]')].some(isVisible);
+  // D3: content the element list cannot describe (drawn on a canvas, a plugin, a large picture without text)
+  const visual = [];
+  for (const n of document.querySelectorAll('canvas, embed, object, svg, iframe[src*="map"], [role=img], [role=application]')) {
+    if (visual.length >= 5 || !isVisible(n) || n.closest('svg') !== null && n.tagName.toLowerCase() !== 'svg' ) continue;
+    const r = n.getBoundingClientRect();
+    if (r.width * r.height < 40000) continue;
+    if (n.tagName.toLowerCase() === 'svg' && text(n.textContent).length > 40) continue;   // has its text in the DOM
+    visual.push({tag: n.tagName.toLowerCase(), w: Math.round(r.width), h: Math.round(r.height),
+                 label: text(n.getAttribute('aria-label') || n.getAttribute('title') || '').slice(0, 80)});
+  }
   return {url: location.href, title: document.title, elements,
           text: text(main ? main.innerText : '').slice(0, 6000),
           forms: [...document.querySelectorAll('form[data-scout-form]')].map(f => ({id: f.getAttribute('data-scout-form'),
                   action: f.action || null, method: (f.method || 'get').toLowerCase()})),
-          cookie_banner: banner, dialog_open: dialog, truncated: elements.length >= maxElements};
+          cookie_banner: banner, dialog_open: dialog, truncated: elements.length >= maxElements, visual};
 }
 """
 
@@ -131,6 +141,7 @@ class PageView:
     cookie_banner: bool = False
     dialog_open: bool = False
     truncated: bool = False
+    visual: list[dict] = field(default_factory=list)
 
     def element(self, eid: str) -> Element | None:
         return next((e for e in self.elements if e.id == eid), None)
@@ -152,6 +163,11 @@ class PageView:
             out["sign_in"] = "This page asks for a password: hand sign-ins to the human (hand_to_human)."
         if self.truncated:
             out["note"] = "Only the first elements are listed; scroll or read for more."
+        if self.visual:
+            what = ", ".join(f"{v['tag']} {v['w']}x{v['h']}" + (f" \"{v['label']}\"" if v.get("label") else "")
+                             for v in self.visual)
+            out["visual"] = (f"Part of this page is drawn, not text ({what}): the element list and text cannot show "
+                             "it. Use vision_look to read it and vision_click to act on it.")
         return out
 
 
@@ -159,7 +175,8 @@ async def snapshot(page: Page, max_elements: int = 150) -> PageView:
     raw = await page.evaluate(SNAPSHOT_JS, max_elements)
     els = [Element(**{k: v for k, v in e.items() if k in Element.__dataclass_fields__}) for e in raw["elements"]]
     return PageView(url=raw["url"], title=raw["title"], elements=els, text=raw["text"], forms=raw["forms"],
-                    cookie_banner=raw["cookie_banner"], dialog_open=raw["dialog_open"], truncated=raw["truncated"])
+                    cookie_banner=raw["cookie_banner"], dialog_open=raw["dialog_open"], truncated=raw["truncated"],
+                    visual=raw.get("visual") or [])
 
 
 def locator_for(page: Page, eid: str):

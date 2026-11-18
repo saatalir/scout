@@ -1,0 +1,13 @@
+# Scout's disposable desktop (Phase 3 D1): a virtual screen with a window manager and Chromium, driven with
+# xdotool, watched through noVNC. One container per task, removed when the task closes it.
+# Built on the browser VM by setup.sh as the scout user (rootless podman): podman build -t scout-desktop .
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium xvfb openbox xdotool x11vnc novnc websockify \
+      imagemagick fonts-dejavu-core fonts-noto-core fonts-noto-cjk ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --uid 1000 desk
+COPY desktop-entry /usr/local/bin/desktop-entry
+USER desk
+ENV HOME=/home/desk DISPLAY=:1
+ENTRYPOINT ["/usr/local/bin/desktop-entry"]

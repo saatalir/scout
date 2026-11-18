@@ -16,7 +16,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 **Phase status:**
 
 - Phase 0 (model feasibility) is done.
-- The browser layer is done and verified live. Phase 2 (browser tier): **the gate passed** (96 % over 3 repeats, 2026-11-18); see [docs/PHASE2.md](docs/PHASE2.md).
+- The browser layer is done and verified live. Phase 3 (vision, desktop, playbook promotion) is being built: [docs/PHASE3.md](docs/PHASE3.md). Phase 2 (browser tier): **the gate passed** (96 % over 3 repeats, 2026-11-18); see [docs/PHASE2.md](docs/PHASE2.md).
 - Phase 1 (Research Scout): **the gate passed** (96 % over 3 repeats, 2026-11-18); only the real library inbox (LIB) is left. Agent loop, task record, tier 1 APIs, fetch/download, library hand-off, CLI, the fixed task eval set, the resilience layer, parallel sub-agents and claim verification are built. The plan for everything left is [docs/ROADMAP.md](docs/ROADMAP.md); Phase 1 detail is in [docs/PHASE1.md](docs/PHASE1.md); the browser tier (Phase 2) in [docs/PHASE2.md](docs/PHASE2.md).
 - **Core theme: resilience.** Scout must try hard to complete its mission, within safety. The principles R1–R8 are in ROADMAP §1.
 
@@ -42,12 +42,14 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/browser/consent.py` | B6: declines cookie/consent banners (13 platforms + label search, 10 languages); never accepts, never consent-or-pay; run by the page reader | `reject_consent()`, `is_reject_label()`, `banner_present()` |
 | `scout/browser/agent_tools.py` | Browser tools for the agent (open, read, click, type, select, scroll, back, screenshot, download, click_submit) on one session per task; gates in code; follows new tabs and popups; declines confirm dialogs except in an approved click_submit; downloads are caught from the browser, never fetched by Playwright's request API (it would bypass the VM and Tor); a remote browser saves them on the VM (set over CDP) and Scout copies them back over SSH | `BROWSER_TOOLS`, `BrowserRunner` |
 | `scout/playbooks.py`, `playbooks/*.yaml` | B5: known site flows as YAML steps (open, type, select, check, click, submit, expect, wait, fuzzy); elements found by label; run through the same browser tools and gates; a failed or fuzzy step hands the page back to the model; traces of successful runs (`trace.yaml` in the task folder) | `run_playbook()`, `matching()`, `find_element()`, `trace_from_actions()` |
+| `scout/vision.py` | D2: vision loop on the current screen (browser page or desktop): look, click/type by description, keys, scroll; screenshot check after each action; submit approval, password, CAPTCHA and cookie-accept gates in code | `VisionTools`, `VISION_TOOLS`, `Screen`, `look()`, `locate()` |
+| `scout/desktop.py`, `deploy/desktop/` | D1: disposable desktop on the VM (rootless podman, image `scout-desktop`), driven via `scout-browser desktop-*` over SSH; no Tor route (refused when Tor is on); downloads copied out and verified on close | `Desktop`, `DesktopScreen`, `DESKTOP_TOOLS` |
 | `scout/resilience.py` | R1/R3 primitives: transient vs permanent errors, `RetryPolicy`, `Retry-After`, per-host `CircuitBreaker`, `RetryTransport` (under all tool HTTP), `Deadline`, `run_with_time_limit`, `SCOUT_CHAOS_DOWN` fault injection | `is_transient()`, `RetryPolicy.call()`, `RetryTransport` |
 | `scout/verify.py` | Claims in the report checked against saved sources (extractor role) | `verify_report(llm, report, files)` |
 | `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
 | `scout/cli.py` | `python -m scout run/resume/show/list`; asks the Tor question and approvals on the terminal | `main()` |
 | `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (20 tasks, phase-tagged; r11–r13 test resilience) and its runner/checks | `python -m evals.phase_tasks` |
-| `deploy/browser-vm/scout-browser` | Helper on the VM (stdlib-only Python); one JSON object per call | `start`, `stop`, `status` |
+| `deploy/browser-vm/scout-browser` | Helper on the VM (stdlib-only Python); one JSON object per call | `start`, `stop`, `status`, `desktop-start/shot/act/files/fetch/stop/list` |
 | `deploy/browser-vm/setup.sh` | Idempotent VM setup (root) | — |
 | `config/browsers.yaml` | Hosts, profiles (`research`, `research-tor`, `local-test`), search and Tor settings | — |
 | `scripts/check_connection.py` | Workstation → Strata layered check | — |
@@ -72,7 +74,8 @@ This file is for coding agents. It gives you the facts you need to change this r
 13. **Do not change a task's checks in `evals/tasks/tasks.yaml`** once results exist for it; add a new task instead, so runs stay comparable.
 14. **Resilience never overrides safety.** Retries and fallbacks must not bypass a CAPTCHA, skip an approval gate, enter credentials or downgrade Tor to direct. If a safety condition blocks the path, report it or hand off.
 15. **External calls are retried centrally.** HTTP: automatically, by `RetryTransport` in `scout.net`. Model: `Scout._model_turn`. Do not add ad-hoc retry loops in tools; add fallbacks (other sources or locations) instead, and report what was tried.
-16. **Never give a coding agent tools on this machine.** Delegate through `scripts/delegate.py`: the model returns files, tests run under `sandbox-exec`, and nothing merges unreviewed. An opencode `--auto` run escaped its policy once (ROADMAP §2).
+16. **Vision and the desktop keep every gate.** Vision clicks that submit go through the approval gate; passwords are never typed and CAPTCHAs never solved on any screen; the desktop container keeps its isolation flags (no capabilities, read-only, no host loopback, view on 127.0.0.1) and is removed when the task ends.
+17. **Never give a coding agent tools on this machine.** Delegate through `scripts/delegate.py`: the model returns files, tests run under `sandbox-exec`, and nothing merges unreviewed. An opencode `--auto` run escaped its policy once (ROADMAP §2).
 
 ## 4. Commands
 

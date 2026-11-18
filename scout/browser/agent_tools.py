@@ -491,6 +491,9 @@ class BrowserRunner:
         await asyncio.sleep(0.4)
         return await self._read()
 
+    def screen(self) -> "BrowserScreen":
+        return BrowserScreen(self)
+
     def close(self) -> None:
         async def _close():
             if self.stack:
@@ -501,3 +504,106 @@ class BrowserRunner:
         finally:
             self.loop.call_soon_threadsafe(self.loop.stop)
             self.thread.join(timeout=5)
+
+
+# -- D2: the browser page as a screen for the vision loop (scout/vision.py) --------------------------------------
+
+AT_POINT_JS = r"""
+([x, y, focused]) => {
+  let el = focused ? document.activeElement : document.elementFromPoint(x, y);
+  if (!el || el === document.body || el === document.documentElement) return null;
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'iframe') {
+    const src = el.src || '';
+    return {tag, label: el.title || src.slice(0, 80),
+            captcha: /recaptcha|hcaptcha|turnstile|challenges\.cloudflare|captcha/i.test(src + ' ' + (el.title || ''))};
+  }
+  const hit = el.closest('a[href], button, input, select, textarea, [role=button], [role=link], [contenteditable]') || el;
+  const t = hit.tagName.toLowerCase();
+  const type = t === 'input' ? (hit.type || 'text') : null;
+  const label = ((hit.getAttribute('aria-label') || hit.innerText || hit.value || hit.title || hit.placeholder || '')
+                 + '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const form = hit.form || hit.closest('form');
+  const submit = (t === 'button' && form && (!hit.getAttribute('type') || hit.type === 'submit')) ||
+                 (t === 'input' && ['submit', 'image'].includes(type));
+  return {tag: t, type, label, password: type === 'password', submit_like: !!submit,
+          in_form: !!form && (t === 'input' && !['checkbox', 'radio', 'button'].includes(type))};
+}
+"""
+PW_KEYS = {"enter": "Enter", "tab": "Tab", "escape": "Escape", "backspace": "Backspace", "delete": "Delete",
+           "space": "Space", "pageup": "PageUp", "pagedown": "PageDown", "home": "Home", "end": "End",
+           "arrowup": "ArrowUp", "arrowdown": "ArrowDown", "arrowleft": "ArrowLeft", "arrowright": "ArrowRight"}
+
+
+class BrowserScreen:
+    """The current browser tab as a `scout.vision.Screen`: screenshots in CSS pixels, so a point the vision role
+    gives is a point Playwright can click."""
+    name = "browser"
+
+    def __init__(self, runner: BrowserRunner):
+        self.r = runner
+
+    async def _page(self):
+        return await self.r._ensure()
+
+    async def _settle(self) -> None:
+        page = await self._page()
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except PWTimeout:
+            pass
+        await asyncio.sleep(0.6)
+        await self.r._follow_popup({})              # a click that opened a tab or popup: continue there
+
+    def shot(self) -> bytes:
+        async def go():
+            return await (await self._page()).screenshot(scale="css")
+        return self.r.run(go())
+
+    def click(self, x: int, y: int) -> None:
+        async def go():
+            await (await self._page()).mouse.click(x, y)
+            await self._settle()
+        self.r.run(go())
+
+    def type_text(self, text: str) -> None:
+        async def go():
+            await (await self._page()).keyboard.type(text, delay=15)
+            await asyncio.sleep(0.3)
+        self.r.run(go())
+
+    def key(self, key: str) -> None:
+        async def go():
+            await (await self._page()).keyboard.press(PW_KEYS.get(key, key))
+            await self._settle()
+        self.r.run(go())
+
+    def scroll(self, dy: int) -> None:
+        async def go():
+            await (await self._page()).mouse.wheel(0, dy)
+            await asyncio.sleep(0.5)
+        self.r.run(go())
+
+    def _probe(self, x: int, y: int, focused: bool) -> dict | None:
+        async def go():
+            try:
+                return await (await self._page()).evaluate(AT_POINT_JS, [x, y, focused])
+            except PWError:
+                return None
+        return self.r.run(go())
+
+    def at(self, x: int, y: int) -> dict | None:
+        return self._probe(x, y, False)
+
+    def focused(self) -> dict | None:
+        return self._probe(0, 0, True)
+
+    def state(self) -> dict:
+        async def go():
+            page = await self._page()
+            try:
+                title = await page.title()
+            except PWError:
+                title = ""
+            return {"url": page.url, "title": title}
+        return self.r.run(go())

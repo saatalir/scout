@@ -298,6 +298,10 @@ def trace_from_actions(actions: list[dict], objective: str) -> dict:
             steps.append({"submit": {"element": label, "summary": a["args"].get("action_summary", "")}})
         elif t == "browser_download":
             steps.append({"fuzzy": f'Download the file behind "{label}" with browser_download.'})
+        elif t.startswith("vision_"):                # D2: what vision did is described, not replayed blindly
+            what = a["args"].get("target") or a["args"].get("key") or ""
+            steps.append({"fuzzy": f"Use {t} on: {what}" + (f' (type "{a["args"]["text"]}")'
+                                                              if t == "vision_type" else "")})
     urls = [a["args"]["url"] for a in actions if a["tool"] == "browser_open"]
     first = re.sub(r"^https?://", "", urls[0]).split("?")[0] if urls else ""
     return {"name": "draft-" + re.sub(r"[^a-z0-9]+", "-", first.lower()).strip("-")[:60],
