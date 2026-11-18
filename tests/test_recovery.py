@@ -236,3 +236,15 @@ def test_runner_repeats_each_with_its_own_library(tmp_path, monkeypatch):
     summary = next(tmp_path.glob("results/*-tasks/summary.md")).read_text()
     assert "| r01-known-paper-pdf | 2/2 |" in summary and "| r11-dead-pdf-link | 0/2 |" in summary
     assert "r01-known-paper-pdf (#2)" in summary
+
+
+def test_failed_download_without_a_title_says_to_retry_with_one():
+    def h(request):
+        if request.url.path == "/missing.pdf":
+            return httpx.Response(404, text="not found")
+        return handler(request)
+    llm = Fake([[call("download_file", url="https://files.example/missing.pdf", expected_kind="pdf")],
+                [call("finish", report="[not done]")], [call("finish", report="[not done] dead link")]])
+    scout(TaskRecord.create("Download it.", tor=False), llm, h=h).run()
+    result = json.loads(next(m["content"] for m in llm.seen[1] if m["role"] == "tool"))
+    assert not result["verified"] and "expected_title" in result["next"]

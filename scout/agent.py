@@ -77,7 +77,7 @@ TOOLS = [
           "Download a file (PDF, dataset) and verify it. Returns a download path to pass to save_to_library, or "
           "says the item is already in the library.",
           {"url": {"type": "string"},
-           "expected_title": {"type": "string", "description": "For papers: the title, checked against the PDF."},
+           "expected_title": {"type": "string", "description": "For papers: the title, checked against the PDF. Always give it when known: if the url fails, Scout finds other copies by title."},
            "expected_kind": {"type": "string", "enum": ["pdf", "zip", "csv", "json", "any"]},
            "filename": {"type": "string"},
            "doi": {"type": "string", "description": "If known: lets Scout try other locations when this URL fails."},
@@ -358,7 +358,15 @@ class Scout:
                                                title=a.get("expected_title"))
             i += 1
         if d is None or not d.verified:
-            return {"verified": False, "error": "no verified download from any location", "tried": tried}
+            out = {"verified": False, "error": "no verified download from any location", "tried": tried}
+            if not (a.get("expected_title") or a.get("doi") or a.get("arxiv")):
+                out["next"] = ("Call download_file again with the same url plus expected_title (and doi or arxiv "
+                               "if known): Scout then looks the work up and tries its other copies. Do not explore "
+                               "the site that failed.")
+            else:
+                out["next"] = ("Find another copy with search_papers or web_search, then download_file it; do not "
+                               "explore the site that failed.")
+            return out
         if d.sha256:
             dup = find_existing(sha256=d.sha256)
             if dup:

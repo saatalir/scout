@@ -20,7 +20,7 @@ A local-first web agent. It researches a topic and downloads papers and data, or
 | --- | --- | --- |
 | 0 — feasibility | Connect to Strata; measure whether the local model can carry each agent role | **Done.** The eval gate passes for planner, browser, vision and extractor ([SETUP §9](docs/SETUP.md#9-reference-results)). |
 | Browser layer (Phase 2 work, built early) | Browser profiles on a VM, search with engine fallback, Tor on/off | **Done and verified live.** |
-| 1 — Research Scout | Task record, academic APIs, fetch/download with verification, library hand-off, planner loop, CLI, fixed task eval set, parallel sub-agents | **In progress.** Done: everything except parallel sub-agents; baseline run of the task eval in [docs/PHASE1.md](docs/PHASE1.md). |
+| 1 — Research Scout | Task record, academic APIs, fetch/download with verification, library hand-off, planner loop, CLI, fixed task eval set, parallel sub-agents | **Gate passed** (96 % over 3 repeats, [docs/PHASE1.md §6](docs/PHASE1.md#6-results)). Parallel sub-agents and claim verification are built; the knowledge-library hand-off waits for the real library inbox. |
 
 ## Architecture
 

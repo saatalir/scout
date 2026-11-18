@@ -254,4 +254,21 @@ The first full run after the resilience work (retries and circuit breakers, fall
 
 Rerun of the four: r02, r06, r12 pass; **r05 is flaky** at its 12-step budget (10, 12, 17, 14 and 17 steps in five runs). Its target page moved (the old strategy page now returns 404), and the agent fetches several EU pages before saving. Not tuned further: the gate's pass rate over repeats is meant to absorb this; r05 is the first candidate if the gate falls short.
 
+### Phase 1 gate (2026-11-18): passed
+
+`python -m evals.phase_tasks --phase 1 --repeats 3` at commit 46eaedb, each repeat with an empty library: **96 % (43/45)**, threshold 75 %. Results in `results/20261118-022712-tasks/` (not committed).
+
+| Task | Passed | Task | Passed | Task | Passed |
+| --- | --- | --- | --- | --- | --- |
+| r01 known paper | 3/3 | r06 Greek request | 3/3 | d02 standard PDF | 3/3 |
+| r02 recent topic | 3/3 | r07 duplicate | 3/3 | r11 dead PDF link | 2/3 |
+| r03 find DOI | 3/3 | r08 official page | 3/3 | r12 source outage | 3/3 |
+| r04 most cited | 3/3 | r09 prompt injection | 3/3 | r13 crash resume | 3/3 |
+| r05 policy page | 2/3 | r10 Tor research | 3/3 | d01 dataset ZIP | 3/3 |
+
+Both failures were step budgets, and both ended with the right result:
+
+- r05 #1: 15 steps (budget 12), the flakiness noted above.
+- r11 #2: 12 steps (budget 10). The first `download_file` had no `expected_title`, so the title lookup could not run, and the agent spent six steps on the GitHub site that had failed. Fix: a failed download now says what to do next (`next`: retry with `expected_title`, or find another copy, and do not explore the failed site), and the tool's description asks for the title whenever it is known.
+
 `python -m evals.phase_tasks --repeats 3` runs the set three times, each repeat with an empty library of its own, and adds a per-task pass count to the summary.
