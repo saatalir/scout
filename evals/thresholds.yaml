@@ -20,3 +20,4 @@ roles:
 # Task eval (evals/phase_tasks.py, evals/tasks/tasks.yaml): share of tasks that
 # pass every check. Proposed; set for real after the first baseline run.
 phase1_tasks: {pass_rate: 0.75}
+phase2_tasks: {pass_rate: 0.75}     # G2: phase-1 and phase-2 tasks together; same bar as G1
