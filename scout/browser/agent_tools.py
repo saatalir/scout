@@ -118,6 +118,7 @@ class BrowserRunner:
         self.remote_dir: str | None = None           # a remote browser saves downloads here, on its own host
         self._remote: dict[str, dict] = {}           # download guid -> {url, name, state}
         self._remote_order: list[str] = []
+        self._consent_tried: set[str] = set()        # page URLs where a banner was already handled (B6)
 
     def _watch(self, page) -> None:
         """Listen for popups, dialogs and downloads on a page, and at once on every popup it opens (a link may
@@ -237,11 +238,32 @@ class BrowserRunner:
         except PWTimeout:
             pass
         self.view = await snapshot(page)
+        consent_note = None
+        if self.view.cookie_banner and self.view.url not in self._consent_tried:
+            self._consent_tried.add(self.view.url)
+            consent_note = await self._decline_cookies(page)
         out = self.view.for_model()
+        if consent_note:
+            out = {"consent": consent_note, **out}
         if self.dialogs:                               # first, so it is seen (and kept in shortened summaries)
             out = {"dialogs": self.dialogs[:], **out}
             self.dialogs.clear()
         return out
+
+    async def _decline_cookies(self, page) -> str | None:
+        """B6: a cookie or consent banner is open: click its reject / necessary-only button (never accept), then
+        re-read the page. Nothing safe found: the banner stays and the model is told (cookie_banner)."""
+        try:
+            from . import consent
+            done = await consent.reject_consent(page)
+        except Exception:  # noqa: BLE001 - a banner problem must never break reading the page
+            return None
+        if not done:
+            return None
+        await asyncio.sleep(0.3)
+        self.view = await snapshot(page)
+        return (f"Declined non-essential cookies ({done.get('platform')}: \"{done.get('clicked', '')}\")"
+                + ("" if done.get("closed") else "; the banner may still be open"))
 
     async def _goto(self, url: str) -> dict:
         page = await self._ensure()

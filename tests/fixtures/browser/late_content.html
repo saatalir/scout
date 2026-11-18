@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Late content</title>
+</head>
+<body>
+  <main>
+    <button>First</button>
+  </main>
+  <script>
+    setTimeout(() => {
+      const b = document.createElement("button");
+      b.textContent = "Late button";
+      document.querySelector("main").appendChild(b);
+    }, 1200);
+  </script>
+</body>
+</html>

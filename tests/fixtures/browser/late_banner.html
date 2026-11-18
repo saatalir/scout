@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Late banner</title>
+</head>
+<body>
+  <main>
+    <p>Content</p>
+  </main>
+  <script>
+    setTimeout(() => {
+      const d = document.createElement("div");
+      d.style.position = "fixed";
+      d.style.bottom = "0";
+      d.style.left = "0";
+      d.style.right = "0";
+      d.style.background = "#eeeeee";
+      d.style.padding = "10px";
+      d.innerHTML = "We use cookies. <button>Reject all</button>";
+      document.body.appendChild(d);
+    }, 800);
+  </script>
+</body>
+</html>

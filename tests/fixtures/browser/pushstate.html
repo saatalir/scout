@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Push state</title>
+</head>
+<body>
+  <main>
+    <h1 id="heading">Step 1</h1>
+    <button id="next">Next step</button>
+  </main>
+  <script>
+    document.getElementById("next").onclick = () => {
+      history.pushState({}, "", "/pushstate.html?step=2");
+      document.getElementById("heading").textContent = "Step 2";
+    };
+  </script>
+</body>
+</html>

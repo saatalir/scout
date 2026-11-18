@@ -24,3 +24,4 @@ include = ["scout*", "evals*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: takes 15 s or more (a click that waits for its timeout)"]
