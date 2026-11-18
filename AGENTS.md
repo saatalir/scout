@@ -16,7 +16,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 **Phase status:**
 
 - Phase 0 (model feasibility) is done.
-- The browser layer is done and verified live. Phase 3 (vision, desktop, playbook promotion) is being built: [docs/PHASE3.md](docs/PHASE3.md). Phase 2 (browser tier): **the gate passed** (96 % over 3 repeats, 2026-11-18); see [docs/PHASE2.md](docs/PHASE2.md).
+- The browser layer is done and verified live. Phase 3 (vision, desktop, playbook promotion): **the gate passed** (97 % over 3 repeats, 2026-11-18); see [docs/PHASE3.md](docs/PHASE3.md). Phase 2 (browser tier): **the gate passed** (96 % over 3 repeats, 2026-11-18); see [docs/PHASE2.md](docs/PHASE2.md).
 - Phase 1 (Research Scout): **the gate passed** (96 % over 3 repeats, 2026-11-18); only the real library inbox (LIB) is left. Agent loop, task record, tier 1 APIs, fetch/download, library hand-off, CLI, the fixed task eval set, the resilience layer, parallel sub-agents and claim verification are built. The plan for everything left is [docs/ROADMAP.md](docs/ROADMAP.md); Phase 1 detail is in [docs/PHASE1.md](docs/PHASE1.md); the browser tier (Phase 2) in [docs/PHASE2.md](docs/PHASE2.md).
 - **Core theme: resilience.** Scout must try hard to complete its mission, within safety. The principles R1–R8 are in ROADMAP §1.
 

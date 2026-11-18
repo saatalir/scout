@@ -117,3 +117,16 @@ a link to the file. f01 from a promoted playbook passed (§4).
 
 The first live start found two bugs, both fixed: the tmpfs home was owned by root (Chromium could not start;
 the helper now mounts it with podman's `U` option), and `desktop_close` failed when nothing had been downloaded.
+
+**Gate G3 (2026-11-18): passed, 97 % (58/60) over 3 repeats** (threshold 75 %; all 20 tasks, phase 3 run).
+
+| Group | Result |
+| --- | --- |
+| v01 (canvas read), v02 (button download) | 3/3 each |
+| f01–f03 (forms, sign-in hand-off) | 3/3 each |
+| r01–r13, d01–d02 (research, downloads, resilience) | 43/45 |
+
+Both failures are the step check (`max_steps 12`) on long research tasks: r05 in repeat 1 (13 steps) and r04 in
+repeat 3 (16 steps). Both still finished `done`. r05 missed the same check once in G2, so this is the model's
+variance on step budgets, not a Phase 3 regression; the checks stay as they are (results exist for them).
+

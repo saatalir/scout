@@ -92,7 +92,7 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 | D2 | Vision loop: screenshot → vision role → action (click, type, scroll, key) with verification after each action | C | D1 | v01 passes | **Built** (`scout/vision.py`), on the browser page and the desktop; v01 passed live (vision read the canvas labels) |
 | D3 | Escalation from the browser tier to the desktop tier when the DOM can't describe the page (canvas, plugins) | C | D2, B2 | v02 passes | **Built**: the page model flags drawn content (`visual`), the prompt escalates browser → vision → desktop; v02 passed live (it needed no vision: the button is a link) |
 | D4 | Playbook promotion: repeated successful traces → proposed playbooks for review | C | B5 | A promoted playbook replays f01 | **Built** (`scout/promote.py`, `python -m scout promote`; Strata, 1 round; reviewed: every typed value a param, no objective text, proposals git-ignored). A playbook promoted from the G2 traces replayed f01 live |
-| G3 | Phase 3 gate: v01–v02 plus all earlier tasks | C | D1–D4 | Pass rate ≥ threshold | |
+| G3 | Phase 3 gate: v01–v02 plus all earlier tasks | C | D1–D4 | Pass rate ≥ threshold | **Passed** 2026-11-18: 97 % (58/60) over 3 repeats; v01, v02 and f01–f03 3/3 each; r04 and r05 1 fail each (step check). [PHASE3 §6](PHASE3.md#6-results) |
 
 ### Cross-cutting (any time)
 
@@ -110,6 +110,6 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 1. X1, then R-core (the base for everything); A1–A4 delegated to Strata in the background while Claude builds R-model, R-loop and R-fallback.
 2. SA and VF; G1 baseline. Then LIB with you.
 3. Phase 2: B1 → B2 → B3/B4 (B6, B7 delegated) → B5 → G2.
-4. Phase 3: D1 (needs Docker on the VM) → D2 → D3 → D4 → G3.
+4. Phase 3: D1 (rootless podman on the VM) → D2 → D3 → D4 → G3.
 
 Each step ends with tests passing, docs updated, and a local commit. Pushes happen when you say so.
