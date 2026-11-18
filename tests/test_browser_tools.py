@@ -103,8 +103,7 @@ def run(script, *, approvals: ApprovalPolicy | None = None, ask=lambda s: False)
 
 def order_script(final_report="[done] ordered"):
     return [
-        [call("browser_open", url="https://forms.test/order")],
-        lambda m: [call("browser_click", element_id=eid(m, '"Reject all"'))],
+        [call("browser_open", url="https://forms.test/order")],        # Scout declines the cookie banner itself (B6)
         lambda m: [call("browser_type", element_id=eid(m, '"Customer name"'), text="Test User")],
         lambda m: [call("browser_select", element_id=eid(m, '"Size"'), option="medium")],
         lambda m: [call("browser_click", element_id=eid(m, "Mushroom"))],

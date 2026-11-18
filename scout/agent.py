@@ -147,8 +147,8 @@ How to work
 - For a broad objective with independent parts (several sub-topics, or many items to collect), split it with
   research_subtasks: up to 6 parts, worked on in parallel, each returning a summary and saved items.
 - Tier 3, the real browser: use browser_open for forms, sign-in flows and pages fetch_page cannot read. Act by
-  element id from the page listing. If a cookie banner is open, decline non-essential cookies first (click
-  "Reject all", "Decline" or similar). Submit forms and press anything that commits (submit, send, pay, order,
+  element id from the page listing. Scout declines cookie banners itself where it can (see "consent"); if a banner
+  is still open, decline non-essential cookies ("Reject all", "Decline" or similar), never accept them for the user. Submit forms and press anything that commits (submit, send, pay, order,
   apply, delete) only with click_submit, which asks the human. Never type passwords: use hand_to_human.
   A file behind a signed-in page: browser_download (click its link). A click that opens a new tab continues
   there; browser_back returns. When Scout names a playbook for the objective, start with run_playbook.

@@ -28,6 +28,7 @@ not the browser's network (and not through Tor).
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import threading
 import time
@@ -50,6 +51,11 @@ SUBMIT_WORDS = re.compile(
 NAV_TIMEOUT_MS = 45000
 DOWNLOAD_WAIT_S = 60          # a download can take a while to start (generated reports)
 DOWNLOAD_DONE_S = 150         # and to finish
+NO_SAFE_CHOICE = ("A consent banner is open and offers no reject or necessary-only choice Scout may click (for "
+                  "example accept-or-subscribe). Do not accept it for the user: get the content another way "
+                  "(fetch_page, another source) or hand_to_human.")
+CONSENT_WAIT_S = 3.0          # after browser_open: how long to wait for a consent banner to be injected
+                              # (SCOUT_CONSENT_WAIT overrides; the offline tests set 0)
 REMOTE_DOWNLOADS = "/tmp/scout-downloads"     # on the VM; one folder per profile, emptied after each copy
 MAX_DOWNLOAD_BYTES = 200_000_000
 
@@ -231,19 +237,31 @@ class BrowserRunner:
         return {"note": "The click opened a new tab or popup; this is it. browser_back returns to the previous page.",
                 **await self._read()}
 
-    async def _read(self) -> dict:
+    async def _read(self, opened: bool = False) -> dict:
         page = await self._ensure()
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=10000)
         except PWTimeout:
             pass
         self.view = await snapshot(page)
+        if opened and not self.view.cookie_banner:
+            from . import consent
+            t0 = time.monotonic()                      # consent banners are often injected after the page loads
+            wait = float(os.environ.get("SCOUT_CONSENT_WAIT", CONSENT_WAIT_S))
+            while time.monotonic() - t0 < wait and not await consent.banner_present(page):
+                await asyncio.sleep(0.5)
+            self.view = await snapshot(page)
         consent_note = None
-        if self.view.cookie_banner and self.view.url not in self._consent_tried:
-            self._consent_tried.add(self.view.url)
-            consent_note = await self._decline_cookies(page)
+        if self.view.url not in self._consent_tried and self.view.url.startswith("http"):
+            from . import consent
+            if self.view.cookie_banner or await consent.banner_present(page):
+                self._consent_tried.add(self.view.url)
+                consent_note = await self._decline_cookies(page) or NO_SAFE_CHOICE
         out = self.view.for_model()
-        if consent_note:
+        if consent_note == NO_SAFE_CHOICE:
+            out.pop("cookie_banner", None)
+            out = {"cookie_banner": NO_SAFE_CHOICE, **out}
+        elif consent_note:
             out = {"consent": consent_note, **out}
         if self.dialogs:                               # first, so it is seen (and kept in shortened summaries)
             out = {"dialogs": self.dialogs[:], **out}
@@ -253,13 +271,25 @@ class BrowserRunner:
     async def _decline_cookies(self, page) -> str | None:
         """B6: a cookie or consent banner is open: click its reject / necessary-only button (never accept), then
         re-read the page. Nothing safe found: the banner stays and the model is told (cookie_banner)."""
-        try:
-            from . import consent
-            done = await consent.reject_consent(page)
-        except Exception:  # noqa: BLE001 - a banner problem must never break reading the page
-            return None
+        from . import consent
+        done = None
+        t0 = time.monotonic()
+        while True:                                    # a consent iframe's buttons can load after the frame
+            try:
+                done = await consent.reject_consent(page)
+            except Exception:  # noqa: BLE001 - a banner problem must never break reading the page
+                return None
+            wait = float(os.environ.get("SCOUT_CONSENT_WAIT", CONSENT_WAIT_S))
+            if done or time.monotonic() - t0 >= wait or not await consent.banner_present(page):
+                break
+            await asyncio.sleep(0.75)
         if not done:
             return None
+        if not done.get("closed"):                     # the click opened a second layer (manage / reject): once more
+            await asyncio.sleep(1.5)
+            again = await consent.reject_consent(page)
+            if again:
+                done = {**again, "via_settings": True}
         await asyncio.sleep(0.3)
         self.view = await snapshot(page)
         return (f"Declined non-essential cookies ({done.get('platform')}: \"{done.get('clicked', '')}\")"
@@ -271,7 +301,7 @@ class BrowserRunner:
         for attempt in range(3):                      # B3: navigation retries
             try:
                 resp = await page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-                out = await self._read()
+                out = await self._read(opened=True)
                 if resp is not None and resp.status >= 400:
                     out["http_status"] = resp.status
                 return out

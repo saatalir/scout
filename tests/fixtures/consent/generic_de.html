@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Generic DE fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Generic DE page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <p>Wir verwenden Cookies.</p>
+    <button onclick="this.parentElement.style.display='none'; document.body.dataset.consent='rejected';">
+      Nur notwendige Cookies
+    </button>
+    <button onclick="this.parentElement.style.display='none'; document.body.dataset.consent='accepted';">
+      Alle akzeptieren
+    </button>
+  </div>
+</body>
+</html>

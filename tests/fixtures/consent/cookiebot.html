@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cookiebot fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Cookiebot page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div id="CybotCookiebotDialog" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <p>We use cookies to improve your experience.</p>
+    <button id="CybotCookiebotDialogBodyButtonDecline"
+            onclick="document.getElementById('CybotCookiebotDialog').style.display='none'; document.body.dataset.consent='rejected';">
+      Decline
+    </button>
+    <button id="CybotCookiebotDialogBodyButtonAccept"
+            onclick="document.getElementById('CybotCookiebotDialog').style.display='none'; document.body.dataset.consent='accepted';">
+      Accept
+    </button>
+  </div>
+</body>
+</html>

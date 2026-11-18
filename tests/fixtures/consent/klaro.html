@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Klaro fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Klaro page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div class="klaro" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <div class="cookie-notice">
+      <p>We use cookies to improve your experience.</p>
+      <button class="cm-btn-decline"
+              onclick="document.querySelector('.klaro').style.display='none'; document.body.dataset.consent='rejected';">
+        Decline
+      </button>
+      <button class="cm-btn-accept"
+              onclick="document.querySelector('.klaro').style.display='none'; document.body.dataset.consent='accepted';">
+        Accept
+      </button>
+    </div>
+  </div>
+</body>
+</html>

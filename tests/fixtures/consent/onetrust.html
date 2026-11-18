@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OneTrust fixture</title>
+</head>
+<body>
+  <main>
+    <h1>OneTrust page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div id="onetrust-banner-sdk" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <p>We use cookies to improve your experience.</p>
+    <button id="onetrust-reject-all-handler"
+            onclick="document.getElementById('onetrust-banner-sdk').style.display='none'; document.body.dataset.consent='rejected';">
+      Reject All
+    </button>
+    <button id="onetrust-pc-btn-handler"
+            onclick="document.getElementById('onetrust-banner-sdk').style.display='none'; document.body.dataset.consent='settings';">
+      Cookie Settings
+    </button>
+    <button id="onetrust-accept-btn-handler"
+            onclick="document.getElementById('onetrust-banner-sdk').style.display='none'; document.body.dataset.consent='accepted';">
+      Accept All
+    </button>
+  </div>
+</body>
+</html>

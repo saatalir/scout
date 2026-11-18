@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Complianz fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Complianz page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div id="cmplz-cookiebanner-container" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <div class="cmplz-cookiebanner">
+      <p>We use cookies to improve your experience.</p>
+      <button class="cmplz-deny"
+              onclick="document.getElementById('cmplz-cookiebanner-container').style.display='none'; document.body.dataset.consent='rejected';">
+        Deny
+      </button>
+      <button class="cmplz-accept"
+              onclick="document.getElementById('cmplz-cookiebanner-container').style.display='none'; document.body.dataset.consent='accepted';">
+        Accept
+      </button>
+    </div>
+  </div>
+</body>
+</html>

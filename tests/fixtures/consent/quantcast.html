@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Quantcast fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Quantcast page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div class="qc-cmp2-container" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <p>We use cookies to improve your experience.</p>
+    <div class="qc-cmp2-summary-buttons">
+      <button mode="secondary"
+              onclick="document.querySelector('.qc-cmp2-container').style.display='none'; document.body.dataset.consent='rejected';">
+        Reject
+      </button>
+      <button mode="primary"
+              onclick="document.querySelector('.qc-cmp2-container').style.display='none'; document.body.dataset.consent='accepted';">
+        Accept
+      </button>
+    </div>
+  </div>
+</body>
+</html>

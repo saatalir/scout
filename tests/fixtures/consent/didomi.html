@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Didomi fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Didomi page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div id="didomi-host" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <div id="didomi-popup">
+      <p>We use cookies to improve your experience.</p>
+      <button id="didomi-notice-disagree-button"
+              onclick="document.getElementById('didomi-host').style.display='none'; document.body.dataset.consent='rejected';">
+        Disagree
+      </button>
+      <button id="didomi-notice-agree-button"
+              onclick="document.getElementById('didomi-host').style.display='none'; document.body.dataset.consent='accepted';">
+        Agree
+      </button>
+    </div>
+  </div>
+</body>
+</html>

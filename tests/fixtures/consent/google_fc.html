@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Google FC fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Google FC page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div class="fc-consent-root" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <p>We use cookies to improve your experience.</p>
+    <button class="fc-cta-do-not-consent"
+            onclick="document.querySelector('.fc-consent-root').style.display='none'; document.body.dataset.consent='rejected';">
+      Do not consent
+    </button>
+    <button class="fc-cta-manage-options"
+            onclick="document.querySelector('.fc-consent-root').style.display='none'; document.body.dataset.consent='settings';">
+      Manage options
+    </button>
+    <button class="fc-cta-consent"
+            onclick="document.querySelector('.fc-consent-root').style.display='none'; document.body.dataset.consent='accepted';">
+      Consent
+    </button>
+  </div>
+</body>
+</html>

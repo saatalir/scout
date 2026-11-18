@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Late banner fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Late banner page</h1>
+    <p>Some content.</p>
+  </main>
+
+  <script>
+    setTimeout(function() {
+      const div = document.createElement('div');
+      div.id = 'onetrust-banner-sdk';
+      div.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px';
+      div.innerHTML = '<p>We use cookies.</p><button id="onetrust-reject-all-handler" onclick="document.getElementById(\'onetrust-banner-sdk\').style.display=\'none\'; document.body.dataset.consent=\'rejected\';">Reject All</button>';
+      document.body.appendChild(div);
+    }, 800);
+  </script>
+</body>
+</html>

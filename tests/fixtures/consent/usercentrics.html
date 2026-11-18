@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Usercentrics fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Usercentrics page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div id="usercentrics-root" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px"></div>
+
+  <script>
+    const host = document.getElementById('usercentrics-root');
+    const root = host.attachShadow({ mode: 'open' });
+
+    const box = document.createElement('div');
+    box.className = 'uc-center-container';
+    box.textContent = 'We use cookies to improve your experience. ';
+
+    const deny = document.createElement('button');
+    deny.setAttribute('data-testid', 'uc-deny-all-button');
+    deny.textContent = 'Deny all';
+    deny.onclick = function () {
+      box.style.display = 'none';
+      document.body.dataset.consent = 'rejected';
+    };
+
+    const accept = document.createElement('button');
+    accept.setAttribute('data-testid', 'uc-accept-all-button');
+    accept.textContent = 'Accept all';
+    accept.onclick = function () {
+      box.style.display = 'none';
+      document.body.dataset.consent = 'accepted';
+    };
+
+    box.appendChild(deny);
+    box.appendChild(accept);
+    root.appendChild(box);
+  </script>
+</body>
+</html>

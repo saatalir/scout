@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Iubenda fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Iubenda page</h1>
+    <p>Some content behind the banner.</p>
+  </main>
+
+  <div id="iubenda-cs-banner" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px">
+    <p>We use cookies to improve your experience.</p>
+    <button class="iubenda-cs-reject-btn"
+            onclick="document.getElementById('iubenda-cs-banner').style.display='none'; document.body.dataset.consent='rejected';">
+      Reject
+    </button>
+    <button class="iubenda-cs-accept-btn"
+            onclick="document.getElementById('iubenda-cs-banner').style.display='none'; document.body.dataset.consent='accepted';">
+      Accept
+    </button>
+  </div>
+</body>
+</html>
