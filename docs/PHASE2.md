@@ -69,6 +69,35 @@ steps:
 - **Traces:** when a task finishes `done`, its browser actions are written to `trace.yaml` in the task folder,
   in this same format (values literal). Phase 3 (D4) turns repeated traces into reviewed playbooks.
 
-## 4. Results
+## 4. Cookie and consent banners (B6)
 
-See §5 once G2 has run.
+Scout declines banners itself (`scout/browser/consent.py`), so the model rarely has to:
+
+- **When:** on every page read where the page model sees a banner, or a known consent platform's banner or iframe
+  is present (once per URL). After `browser_open` Scout waits up to 3 s for a banner injected after the page
+  loaded (`SCOUT_CONSENT_WAIT`), and keeps trying for that long while a consent iframe's buttons load.
+- **How:** 13 consent platforms by their own markup (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics in its
+  shadow root, TrustArc, Sourcepoint in its iframe, Google Funding Choices, CookieYes, Complianz, Osano, iubenda,
+  Klaro), then a label search inside banner-like containers. A click that only opened a second layer ("Manage
+  options") is followed by one more try.
+- **What it clicks** is decided by one rule, `is_reject_label`: explicit reject wording ("Reject all", "Deny",
+  "Alle ablehnen", "Απόρριψη όλων", "I do not agree") or necessary-only wording ("Accept only necessary", "Nur
+  notwendige Cookies", "Continue without accepting"), in ten languages. **Never** an accept label (even "Accept
+  non-essential cookies"), and never consent-or-pay or account flows ("Reject all and subscribe", "SUBSCRIBE AND
+  DECLINE", "Log in to refuse"). A platform's own reject selector must also carry such a label.
+- **No safe choice** (accept-or-subscribe walls): nothing is clicked and the model is told not to accept for the
+  user, but to get the content another way or hand over.
+
+Live check (fresh local browser, 2026-11-18): Cookiebot, OneTrust and BBC's Sourcepoint layer declined; the
+Guardian, Spiegel, Le Monde and El País (consent-or-pay) left alone. On the VM's persistent profile most sites
+showed no banner (choices already stored).
+
+## 5. Tests
+
+`tests/test_browser_tools.py`, `test_browser_more.py`, `test_playbooks.py`, `test_consent.py` and
+`test_browser_resilience.py` (B7: slow, flaky and failing pages, late and re-rendered content, overlays, infinite
+scroll, popups, pushState, late banners) run on a local headless Chromium with routed fixture pages; no network.
+
+## 6. Results
+
+See below once G2 has run.

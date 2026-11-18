@@ -17,7 +17,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 
 - Phase 0 (model feasibility) is done.
 - The browser layer is done and verified live.
-- Phase 1 (Research Scout): **the gate passed** (96 % over 3 repeats, 2026-11-18); only the real library inbox (LIB) is left. Agent loop, task record, tier 1 APIs, fetch/download, library hand-off, CLI, the fixed task eval set, the resilience layer, parallel sub-agents and claim verification are built. The plan for everything left is [docs/ROADMAP.md](docs/ROADMAP.md); Phase 1 detail is in [docs/PHASE1.md](docs/PHASE1.md).
+- Phase 1 (Research Scout): **the gate passed** (96 % over 3 repeats, 2026-11-18); only the real library inbox (LIB) is left. Agent loop, task record, tier 1 APIs, fetch/download, library hand-off, CLI, the fixed task eval set, the resilience layer, parallel sub-agents and claim verification are built. The plan for everything left is [docs/ROADMAP.md](docs/ROADMAP.md); Phase 1 detail is in [docs/PHASE1.md](docs/PHASE1.md); the browser tier (Phase 2) in [docs/PHASE2.md](docs/PHASE2.md).
 - **Core theme: resilience.** Scout must try hard to complete its mission, within safety. The principles R1–R8 are in ROADMAP §1.
 
 ## 2. Repository map
@@ -39,6 +39,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/tools/web.py` | Tier 2: page → Markdown; downloads verified by type, size and PDF title | `fetch_page()`, `download_file()`, `pdf_text()` |
 | `scout/approvals.py` | Approval policy for irreversible actions: ask / auto / deny, domain allowlist, payments switch | `ApprovalPolicy.from_env()`, `.decide()` |
 | `scout/browser/page.py` | Page model: visible interactive elements with stable ids, labels, forms, banners; password values never read | `snapshot(page)`, `PageView.for_model()`, `locator_for()` |
+| `scout/browser/consent.py` | B6: declines cookie/consent banners (13 platforms + label search, 10 languages); never accepts, never consent-or-pay; run by the page reader | `reject_consent()`, `is_reject_label()`, `banner_present()` |
 | `scout/browser/agent_tools.py` | Browser tools for the agent (open, read, click, type, select, scroll, back, screenshot, download, click_submit) on one session per task; gates in code; follows new tabs and popups; declines confirm dialogs except in an approved click_submit; downloads are caught from the browser, never fetched by Playwright's request API (it would bypass the VM and Tor); a remote browser saves them on the VM (set over CDP) and Scout copies them back over SSH | `BROWSER_TOOLS`, `BrowserRunner` |
 | `scout/playbooks.py`, `playbooks/*.yaml` | B5: known site flows as YAML steps (open, type, select, check, click, submit, expect, wait, fuzzy); elements found by label; run through the same browser tools and gates; a failed or fuzzy step hands the page back to the model; traces of successful runs (`trace.yaml` in the task folder) | `run_playbook()`, `matching()`, `find_element()`, `trace_from_actions()` |
 | `scout/resilience.py` | R1/R3 primitives: transient vs permanent errors, `RetryPolicy`, `Retry-After`, per-host `CircuitBreaker`, `RetryTransport` (under all tool HTTP), `Deadline`, `run_with_time_limit`, `SCOUT_CHAOS_DOWN` fault injection | `is_transient()`, `RetryPolicy.call()`, `RetryTransport` |
@@ -52,7 +53,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scripts/check_connection.py` | Workstation → Strata layered check | — |
 | `scripts/browser_check.py` | Browser layered check; `--search`, `--capture`, `--tor`/`--no-tor` | — |
 | `evals/` | Phase 0 eval gate: `run.py`, `core.py`, `suites/*.py`, `thresholds.yaml` | `python -m evals.run` |
-| `tests/` | Offline tests; `fake_ssh.py` stands in for ssh; `mock_server.py` is a fake OpenAI server | `pytest` |
+| `tests/` | Offline tests; `fake_ssh.py` stands in for ssh; `mock_server.py` is a fake OpenAI server; `browser_fixtures.py` serves misbehaving pages to the local browser | `pytest` |
 
 ## 3. Invariants — do not break these
 
@@ -132,6 +133,7 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_LIBRARY_DIR` | path | The knowledge library's inbox (default `./library-inbox`) |
 | `SCOUT_TASKS_DIR` | path | Task records (default `./tasks`) |
 | `SCOUT_PLAYBOOKS_DIR` | path | Playbooks (default `./playbooks`) |
+| `SCOUT_CONSENT_WAIT` | seconds | How long `browser_open` waits for a consent banner injected after load (default 3; tests 0) |
 | `SCOUT_APPROVALS` | `ask` / `auto` / `deny` | Who approves irreversible actions (§3 rule 5); `scout run --approvals` overrides per task |
 | `SCOUT_AUTO_APPROVE_DOMAINS`, `SCOUT_AUTO_APPROVE_PAYMENTS` | comma list / `yes`/`no` | Limits on `auto` approvals |
 | `SCOUT_CHAOS_DOWN` | comma list of hosts | **Tests and evals only:** makes those hosts unreachable (fault injection, eval task r12) |
