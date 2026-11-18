@@ -100,4 +100,18 @@ scroll, popups, pushState, late banners) run on a local headless Chromium with r
 
 ## 6. Results
 
-See below once G2 has run.
+`python -m evals.phase_tasks --phase 2 --repeats 3` at commit dce4503 (the 15 phase-1 tasks plus f01–f03, each
+repeat with an empty library), 2026-11-18: **96 % (52/54)**, threshold 75 %: **G2 passed**. Raw results in
+`results/20261118-072645-tasks/` (not committed).
+
+| Task | Passes | Task | Passes | Task | Passes |
+| --- | --- | --- | --- | --- | --- |
+| r01–r04, r06–r13 | 3/3 each | d01, d02 | 3/3 each | f01 form with approval | 3/3 (3 steps, from its playbook) |
+| r05 policy page | 1/3 | f02 sign-in hand-off | 3/3 (`needs_human`) | f03 multi-field form | 3/3 (3 steps, from its playbook) |
+
+- **f01–f03** ran in 3–4 steps and about 30–45 s each: the playbooks did the forms in one call, and the approval
+  gate asked once per submit.
+- **r05** failed only its `max_steps 12` check (15 and 14 steps); the report and the saved page were right each
+  time. The strategy's targets are no longer on the hydrogen page, so the agent goes on to the 2020 strategy PDF
+  for them. This is the same flakiness noted for G1 ([PHASE1 §6](PHASE1.md#6-results)). The check is the eval's, not Scout's
+  budget (40 steps in the eval); the agent was not tuned to stop earlier.
