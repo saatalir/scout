@@ -256,7 +256,7 @@ Rerun of the four: r02, r06, r12 pass; **r05 is flaky** at its 12-step budget (1
 
 ### Phase 1 gate (2026-11-18): passed
 
-`python -m evals.phase_tasks --phase 1 --repeats 3` at commit 46eaedb, each repeat with an empty library: **96 % (43/45)**, threshold 75 %. Results in `results/20261118-022712-tasks/` (not committed).
+`python -m evals.phase_tasks --phase 1 --repeats 3` at commit 46eaedb, each repeat with an empty library: **96 % (43/45)**, threshold 75 %. Run from a temporary worktree; its raw results were not kept, and this section is the record.
 
 | Task | Passed | Task | Passed | Task | Passed |
 | --- | --- | --- | --- | --- | --- |
