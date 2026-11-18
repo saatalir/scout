@@ -468,9 +468,13 @@ class Scout:
         if name == "desktop_close":
             if self._desktop is None:
                 return {"error": "no desktop is open"}
-            files, d = [], self._desktop
+            files, d, warning = [], self._desktop, None
             try:
-                for f in d.files():
+                try:
+                    listing = d.files()
+                except Exception as e:  # noqa: BLE001 - closing must not fail over the copy-out
+                    listing, warning = [], f"could not list the desktop's downloads: {e}"[:300]
+                for f in listing:
                     try:
                         data = d.fetch(f["name"])
                     except Exception as e:  # noqa: BLE001
@@ -482,7 +486,7 @@ class Scout:
                     files.append({"file": f["name"], **self._register(got)})
             finally:
                 self._close_desktop()
-            return {"closed": True, "files": files,
+            return {"closed": True, "files": files, **({"warning": warning} if warning else {}),
                     "note": "Back on the browser. Pass a verified file's path to save_to_library." if files else
                             "Back on the browser. The desktop downloaded no files."}
         if self.rec.tor:

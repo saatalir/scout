@@ -4,6 +4,9 @@
 # container; the container is the sandbox: no capabilities, no new privileges, read-only root, no access to the
 # VM's loopback services.
 set -eu
+# The home is a tmpfs owned by this user (podman --tmpfs …,U); if an older helper mounted it root-owned, use /tmp.
+if ! touch "$HOME/.w" 2>/dev/null; then export HOME=/tmp/desk; mkdir -p "$HOME"; fi
+rm -f "$HOME/.w"
 GEOMETRY="${SCOUT_GEOMETRY:-1280x800}"
 W="${GEOMETRY%x*}"; H="${GEOMETRY#*x}"
 mkdir -p "$HOME/Downloads" "$HOME/.chromium/Default"
@@ -17,5 +20,5 @@ openbox >/tmp/openbox.log 2>&1 &
 x11vnc -display :1 -localhost -rfbport 5900 -forever -shared -nopw -quiet >/tmp/vnc.log 2>&1 &
 websockify --web /usr/share/novnc 0.0.0.0:6080 127.0.0.1:5900 >/tmp/novnc.log 2>&1 &
 exec chromium --no-sandbox --user-data-dir="$HOME/.chromium" --no-first-run --no-default-browser-check \
-  --disable-session-crashed-bubble --password-store=basic --window-position=0,0 --window-size="$W,$H" \
+  --disable-session-crashed-bubble --password-store=basic --disable-gpu --window-position=0,0 --window-size="$W,$H" \
   --start-maximized "${SCOUT_URL:-about:blank}"

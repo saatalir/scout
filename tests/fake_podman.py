@@ -71,6 +71,9 @@ if cmd == "exec":
         with log.open("a") as f:
             f.write(json.dumps(rest) + "\n")
     elif rest[0] == "find":
+        if rest[1] != "/home/desk/Downloads":
+            print(f"find: '{rest[1]}': No such file or directory", file=sys.stderr)
+            sys.exit(1)
         for p in sorted((d / "Downloads").iterdir()):
             print(f"{p.name}\t{p.stat().st_size}")
     elif rest[0] == "cat":

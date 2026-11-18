@@ -237,7 +237,7 @@ def cmd_desktop_start(a) -> None:
            "-p", f"127.0.0.1:{port}:6080",
            "--memory", "2g", "--cpus", "2", "--pids-limit", "1024", "--shm-size", "1g",
            "--cap-drop", "all", "--security-opt", "no-new-privileges", "--read-only",
-           "--tmpfs", "/tmp:rw,size=512m", "--tmpfs", "/home/desk:rw,size=2g",
+           "--tmpfs", "/tmp:rw,size=512m", "--tmpfs", "/home/desk:rw,size=2g,U",
            "-e", f"SCOUT_URL={a.url}", "-e", f"SCOUT_GEOMETRY={a.geometry}", IMAGE)
     deadline = time.time() + a.wait
     while time.time() < deadline:
@@ -280,21 +280,36 @@ def cmd_desktop_act(a) -> None:
     out({"ok": True})
 
 
+DOWNLOAD_DIRS = ("/home/desk/Downloads", "/tmp/desk/Downloads")   # the second: an image's fallback home
+
+
+def _listing(c: str) -> list[tuple[str, str, int]]:
+    """(dir, name, bytes) of finished downloads; a missing folder is no error (nothing was downloaded)."""
+    found = []
+    for d in DOWNLOAD_DIRS:
+        r = subprocess.run([PODMAN, "exec", c, "find", d, "-maxdepth", "1", "-type", "f", "-printf", "%f\t%s\n"],
+                           capture_output=True, timeout=60)
+        if r.returncode != 0 and b"No such file" not in r.stderr:
+            fail(f"podman exec failed: {r.stderr.decode(errors='replace').strip()[-300:]}")
+        for line in r.stdout.decode(errors="replace").splitlines():
+            name, _, size = line.rpartition("\t")
+            if name and not name.endswith((".crdownload", ".part")):
+                found.append((d, name, int(size or 0)))
+    return found
+
+
 def cmd_desktop_files(a) -> None:
-    raw = podman("exec", desk(a.name), "find", "/home/desk/Downloads", "-maxdepth", "1", "-type", "f",
-                 "-printf", "%f\t%s\n")
-    files = []
-    for line in raw.splitlines():
-        name, _, size = line.rpartition("\t")
-        if name and not name.endswith((".crdownload", ".part")):
-            files.append({"name": name, "bytes": int(size or 0)})
-    out({"ok": True, "files": files})
+    out({"ok": True, "files": [{"name": n, "bytes": b} for _, n, b in _listing(desk(a.name))]})
 
 
 def cmd_desktop_fetch(a) -> None:
     if not FILE_RE.match(a.file) or a.file in (".", ".."):
         fail("bad file name")
-    data = podman("exec", desk(a.name), "cat", "--", f"/home/desk/Downloads/{a.file}", timeout=120, binary=True)
+    c = desk(a.name)
+    where = next((d for d, n, _ in _listing(c) if n == a.file), None)
+    if where is None:
+        fail(f"no download named {a.file!r}")
+    data = podman("exec", c, "cat", "--", f"{where}/{a.file}", timeout=120, binary=True)
     if len(data) > MAX_FETCH:
         fail("the file is larger than 100 MB")
     out({"ok": True, "name": a.file, "data_b64": base64.b64encode(data).decode()})
