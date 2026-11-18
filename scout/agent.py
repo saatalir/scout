@@ -143,6 +143,8 @@ How to work
   element id from the page listing. If a cookie banner is open, decline non-essential cookies first (click
   "Reject all", "Decline" or similar). Submit forms and press anything that commits (submit, send, pay, order,
   apply, delete) only with click_submit, which asks the human. Never type passwords: use hand_to_human.
+  A file behind a signed-in page: browser_download (click its link). A click that opens a new tab continues
+  there; browser_back returns.
 - Try hard. When a step fails, do not give up: use the alternatives — another source (openalex, crossref,
   arxiv), another URL (the paper's DOI or landing page, arXiv), web_search, a broader or simpler query.
   Network errors were already retried for you; read the error and change something before trying again.
@@ -407,7 +409,34 @@ class Scout:
                 cfg = load_browser_config()
                 profile = (cfg.search.tor_profile if self.rec.tor else cfg.search.profile) or cfg.search.profile
             self._browser = BrowserRunner(profile, setup=self.browser_setup)
+            self._browser.downloads_dir = self.rec.downloads
+            self._browser.screens_dir = self.rec.dir / "screenshots"
         return self._browser
+
+    def _browser_call(self, name: str, a: dict) -> Any:
+        if name == "browser_download":
+            out = self._register(self.browser.call(name, a, approve=self._gate))
+        else:
+            out = self.browser.call(name, a, approve=self._gate)
+        if self._browser is not None and self._browser.page is not None and not self._browser.page.is_closed():
+            self.rec.state["browser_url"] = self._browser.page.url      # where to pick up after a hand-off
+        return out
+
+    def _register(self, d: Any) -> Any:
+        """A browser download, kept like download_file's: unverified files are deleted, duplicates detected."""
+        if not isinstance(d, web.Download):
+            return d
+        if not d.verified:
+            if d.path:
+                Path(d.path).unlink(missing_ok=True)
+            return {"verified": False, "error": "the downloaded file failed verification", "problems": d.problems}
+        dup = find_existing(sha256=d.sha256) if d.sha256 else None
+        if dup:
+            Path(d.path).unlink(missing_ok=True)
+            return {"already_in_library": True, "item": dup["path"], "title": dup.get("title"), "has_file": True,
+                    "note": DONE_NOTE}
+        self.downloads[d.path] = d
+        return d.for_model()
 
     def _gate(self, summary: str) -> bool:
         """The approval gate for click_submit: decided here and logged as its own step, before the click."""
@@ -447,7 +476,7 @@ class Scout:
         if name == "research_subtasks":
             return self._subtasks(a)
         if name in BROWSER_TOOL_NAMES:
-            return self.browser.call(name, a, approve=self._gate)
+            return self._browser_call(name, a)
         raise ValueError(f"unknown tool {name!r}; tools: {', '.join(TOOL_NAMES)}")
 
     def _run_sub(self, n: int, question: str) -> dict:
@@ -606,6 +635,14 @@ class Scout:
             rec.messages = [{"role": "system", "content": SYSTEM},
                             {"role": "user", "content": rec.objective}]
         self._repair_transcript()
+        if rec.status == "needs_human" and rec.state.get("handed_over"):
+            # B4: the person did what was handed over (a sign-in, a CAPTCHA, a two-factor prompt); carry on.
+            h = rec.state.pop("handed_over")
+            self._nudge(f"The person has finished what you handed over ({h['reason']}). Continue the task"
+                        + (f": the browser was at {h['url']}; open it again with browser_open (the sign-in is kept "
+                           "in the browser profile) and read the page." if h.get("url") else ".")
+                        + " If it still needs the person, hand over again.")
+            self.notify("resumed after the hand-off to a person")
         rec.status = "running"
         rec.save()
         idle = 0
@@ -712,7 +749,12 @@ class Scout:
                 return True
             if name == "hand_to_human":
                 reason = str(args.get("reason", "")).strip()
-                rec.status, rec.report = "needs_human", reason
+                live = self._browser.live_view if self._browser is not None else None
+                st["handed_over"] = {"reason": reason, "url": st.get("browser_url"), "live_view": live}
+                rec.status = "needs_human"
+                rec.report = reason + (f"\n\nTake over in the live view: {live}" if live else "") + (
+                    f"\nThe browser is at {st['browser_url']}." if st.get("browser_url") else "") + (
+                    f"\nWhen done, run `python -m scout resume {rec.id}`: Scout continues from there.")
                 rec.log("hand_to_human", args, True, reason)
                 rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": "handed over"})
                 rec.save()

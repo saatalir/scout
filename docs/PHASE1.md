@@ -40,8 +40,19 @@ python -m scout resume <task id>     # continue a paused or unfinished task from
 | --- | --- |
 | `--tor` / `--no-tor` | Decide Tor for this task without the question |
 | `--max-steps N` | Step budget (default 40) |
+| `--approvals ask\|auto\|deny` | Who approves irreversible actions (default `SCOUT_APPROVALS`, else `ask`) |
 
-Approvals (`request_approval`) are asked on the terminal. Without a terminal they are denied.
+Approvals (`request_approval`, `click_submit`) are asked on the terminal in `ask` mode. Without a terminal they are denied.
+
+**Statuses and how a task continues:**
+
+| Status | Meaning | Continue with |
+| --- | --- | --- |
+| `done` | Finished with a report | — |
+| `partial` | Budget used up; the report says what is not done | `resume` (raise `--max-steps`) |
+| `waiting` | The model did not answer for 10 minutes | `resume` when Strata is back |
+| `needs_human` | A sign-in, CAPTCHA or two-factor prompt. The report has the live-view link and the browser's URL | Do it in the live view, then `resume`: Scout is told the person is done and reopens that URL (the sign-in stays in the browser profile) |
+| `running` (stale) | The process died | `resume`: half-run turns are repaired from the record |
 
 ## 2. How a task runs
 

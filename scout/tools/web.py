@@ -119,10 +119,7 @@ def _filename(url: str, resp: httpx.Response, kind: str, wanted: str | None) -> 
         cd = resp.headers.get("content-disposition", "")
         m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, re.I)
         name = unquote(m.group(1)) if m else unquote(Path(urlparse(str(resp.url)).path).name)
-    name = re.sub(r"[^\w.\-]+", "_", name or "").strip("._") or "download"
-    if kind in EXT and not name.lower().endswith(EXT[kind]):
-        name += EXT[kind]
-    return name[:120]
+    return safe_name(name, kind)
 
 
 def _words(s: str) -> list[str]:
@@ -169,7 +166,28 @@ def download_file(client: httpx.Client, url: str, dest_dir: Path, *, filename: s
         final_url = str(r.url)
         kind = sniff_kind(data[:4096], ctype)
         name = _filename(final_url, r, kind, filename)
+    return verify_bytes(data, final_url, ctype, name, dest_dir, kind=kind, expected_title=expected_title,
+                        expected_kind=expected_kind)
 
+
+def safe_name(name: str | None, kind: str) -> str:
+    name = re.sub(r"[^\w.\-]+", "_", name or "").strip("._") or "download"
+    if kind in EXT and not name.lower().endswith(EXT[kind]):
+        name += EXT[kind]
+    return name[:120]
+
+
+def verify_bytes(data: bytes, url: str, ctype: str, name: str, dest_dir: Path, *, kind: str | None = None,
+                 expected_title: str | None = None, expected_kind: str | None = None) -> Download:
+    """The checks every download passes, whichever way it arrived (HTTP or the real browser): size, kind
+    from the first bytes, not an HTML page, PDF opens and contains the expected title. Writes the file."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    problems: list[str] = []
+    kind = kind or sniff_kind(data[:4096], ctype)
+    final_url = url
+    if len(data) > MAX_BYTES:
+        return Download(url=url, path=None, bytes=len(data), content_type=ctype, kind="binary", verified=False,
+                        problems=[f"too large: over {MAX_BYTES} bytes"])
     if len(data) < MIN_BYTES:
         problems.append(f"too small: {len(data)} bytes")
     if kind == "html":
