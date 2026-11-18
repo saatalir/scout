@@ -618,7 +618,11 @@ class Scout:
                     if self.deadline.expired:
                         self._final_report(f"Stopped: the {self.deadline.seconds / 60:.0f}-minute time budget is used up.")
                         break
-                    r = self._model_turn()
+                    if rec.state.pop("finish_only_next", False):
+                        # after verification feedback: rewrite the report, no new research (enforced, not asked)
+                        r = self._model_turn(tools=[t for t in self.tools if t["function"]["name"] == "finish"])
+                    else:
+                        r = self._model_turn()
                     rec.messages.append(_assistant_dict(r.message))
                     if not r.tool_calls:
                         idle += 1
@@ -662,7 +666,7 @@ class Scout:
                                                                  "Call the tool again with a valid JSON object."})})
                 continue
             if name == "finish":
-                recent_failures = [s for s in rec.steps[-8:] if not s.ok and s.tool != "verify_report"]
+                recent_failures = [s for s in rec.steps[-8:] if not s.ok]
                 if recent_failures and not st["finish_challenged"] and len(rec.steps) < self.max_steps - 2 \
                         and not self.deadline.expired:
                     st["finish_challenged"] = True        # R7: challenge a premature finish once
@@ -683,14 +687,20 @@ class Scout:
                     except Exception as e:  # noqa: BLE001
                         from .verify import Verification
                         v = Verification(error=type(e).__name__)
-                    rec.log("verify_report", {}, v.ok, v.note() + (
-                        f" Unsupported: {[c.get('claim', '')[:80] for c in v.unsupported]}" if v.unsupported else ""))
+                    # A check by Scout, not an action of the agent: recorded in the task state, not as a step,
+                    # so it does not use the agent's step budget.
+                    st["verification"] = {"ok": v.ok, "note": v.note(), "checked": v.checked,
+                                          "partial": len(v.partial), "error": v.error,
+                                          "unsupported": [c.get("claim", "")[:200] for c in v.unsupported]}
+                    rec.save()
                     if v.unsupported and len(rec.steps) < self.max_steps - 1:
                         listing = "\n".join(f"- {c.get('claim', '')}" for c in v.unsupported[:8])
                         rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": (
-                            "Verification: these claims are not supported by the sources you saved:\n" + listing
-                            + "\nCorrect the report: remove them, or fix them to match the sources (fetch more if "
-                              "needed). Then call finish again.")})
+                            "Verification: these claims in your report are not supported by the sources you saved:\n"
+                            + listing + "\nFix the report, not the research: remove these claims or reword them to "
+                              "say only what the saved sources say. Do not start new searches for them. Then call "
+                              "finish again with the corrected report.")})
+                        st["finish_only_next"] = True
                         self.notify(f"verification: {len(v.unsupported)} unsupported claims sent back")
                         continue
                     report = f"{report}\n\n{v.note()}"

@@ -7,6 +7,8 @@ in "litellm" mode the role name itself is sent and the proxy maps it.
 
 from __future__ import annotations
 
+import openai
+
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -74,8 +76,19 @@ class LLM:
         tool_choice: str | dict | None = None,
         temperature: float = 0.0,
         max_tokens: int = 1024,
+        think: bool | None = None,
         **extra: Any,
     ) -> ChatResult:
+        """think=False asks the server to skip the model's reasoning (Qwen-style chat_template_kwargs), for
+        calls that need a quick judgement rather than deliberation; a server that rejects it gets a plain call."""
+        if think is not None:
+            body = dict(extra.pop("extra_body", None) or {})
+            body["chat_template_kwargs"] = {**body.get("chat_template_kwargs", {}), "enable_thinking": think}
+            try:
+                return self.chat(role, messages, tools=tools, tool_choice=tool_choice, temperature=temperature,
+                                 max_tokens=max_tokens, extra_body=body, **extra)
+            except openai.BadRequestError:
+                pass
         kwargs: dict[str, Any] = dict(
             model=self.model_for(role),
             messages=messages,

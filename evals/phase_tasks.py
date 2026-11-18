@@ -45,6 +45,7 @@ class Outcome:
     error: str | None = None
     report: str = ""
     record: str | None = None
+    repeat: int = 1
 
 
 # -- checks ------------------------------------------------------------------------
@@ -135,7 +136,7 @@ def run_one(task: dict, llm) -> Outcome:
     env = {k: str(v) for k, v in (task.get("env") or {}).items()}
     if task.get("fresh_library"):
         # a task that must fetch an item itself, even if an earlier task in the run already saved it
-        env["SCOUT_LIBRARY_DIR"] = str(library_dir().with_name(f"library-{task['id']}"))
+        env["SCOUT_LIBRARY_DIR"] = str(library_dir().with_name(f"{library_dir().name}-{task['id']}"))
     saved_env = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     files_before = sum(1 for e in _read_index(library_dir()) if e.get("file"))
@@ -180,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--phase", type=int, default=1, help="run tasks of this phase and earlier")
     ap.add_argument("--only", help="comma list of task ids")
     ap.add_argument("--skip-needs", default="", help="comma list: skip tasks needing these (browser, approval)")
+    ap.add_argument("--repeats", type=int, default=1,
+                    help="run the whole set this many times, each repeat with its own library (the gate uses 3)")
     a = ap.parse_args(argv)
 
     out_dir = ROOT / "results" / (time.strftime("%Y%m%d-%H%M%S") + "-tasks")
@@ -197,6 +200,18 @@ def main(argv: list[str] | None = None) -> int:
     llm = LLM()
     print(f"Model {llm.model_for('planner')}; {len(tasks)} task(s); writing to {out_dir}")
     outcomes: list[Outcome] = []
+    for rep in range(1, a.repeats + 1):
+        if a.repeats > 1:
+            # each repeat starts from an empty library, so r07/r11 see the same situation every time
+            os.environ["SCOUT_LIBRARY_DIR"] = str(out_dir / f"library-{rep}")
+            os.environ["SCOUT_TASKS_DIR"] = str(out_dir / f"tasks-{rep}")
+            print(f"Repeat {rep}/{a.repeats}")
+        outcomes += run_set(tasks, llm, skip, out_dir, rep)
+    return summarise(outcomes, a, llm, out_dir)
+
+
+def run_set(tasks: list[dict], llm, skip: set[str], out_dir: Path, rep: int) -> list[Outcome]:
+    outcomes: list[Outcome] = []
     done: set[str] = set()
     for t in tasks:
         if skip & set(t.get("needs", [])):
@@ -208,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  SKIP  {t['id']}  (after {t['after']})")
             continue
         o = run_one(t, llm)
+        o.repeat = rep
         done.add(t["id"])
         outcomes.append(o)
         failed = [k for k, v in o.checks.items() if not v]
@@ -215,7 +231,10 @@ def main(argv: list[str] | None = None) -> int:
               + (f"  failed: {failed}" if failed else "") + (f"  error: {o.error}" if o.error else ""))
         with open(out_dir / "results.jsonl", "a") as f:
             f.write(json.dumps(o.__dict__, ensure_ascii=False) + "\n")
+    return outcomes
 
+
+def summarise(outcomes: list[Outcome], a, llm, out_dir: Path) -> int:
     ran = [o for o in outcomes if o.status != "skipped"]
     rate = sum(o.passed for o in ran) / max(1, len(ran))
     th = (yaml.safe_load(THRESHOLDS.read_text()) or {}).get(f"phase{a.phase}_tasks", {}).get("pass_rate", 0.75)
@@ -226,7 +245,13 @@ def main(argv: list[str] | None = None) -> int:
     for o in outcomes:
         res = "skip" if o.status == "skipped" else ("pass" if o.passed else "fail")
         failed = ", ".join(k for k, v in o.checks.items() if not v) or (o.error or "")
-        lines.append(f"| {o.task_id} | {res} | {o.status} | {o.steps} | {o.seconds:.0f}s | {failed} |")
+        task = o.task_id + (f" (#{o.repeat})" if a.repeats > 1 else "")
+        lines.append(f"| {task} | {res} | {o.status} | {o.steps} | {o.seconds:.0f}s | {failed} |")
+    if a.repeats > 1:
+        lines += ["", f"Per task over {a.repeats} repeats:", "", "| Task | Passed |", "| --- | --- |"]
+        for tid in dict.fromkeys(o.task_id for o in ran):
+            mine = [o for o in ran if o.task_id == tid]
+            lines.append(f"| {tid} | {sum(o.passed for o in mine)}/{len(mine)} |")
     (out_dir / "summary.md").write_text("\n".join(lines) + "\n")
     print(f"\nPass rate {rate:.0%} ({sum(o.passed for o in ran)}/{len(ran)}); threshold {th:.0%}. {out_dir / 'summary.md'}")
     return 0 if ran and rate >= th else 1

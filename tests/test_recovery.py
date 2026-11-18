@@ -183,3 +183,56 @@ def test_sources_include_catalogue_metadata():
     [src] = verify.gather_sources([str(md)])
     assert src["text"].startswith("[catalogue record]") and "year: 2023" in src["text"] and "cited_by: 338" in src["text"]
     assert "Cracking ammonia" in src["text"]
+
+
+# -- the think switch ---------------------------------------------------------------------------------
+
+def test_think_switch_and_fallback_when_the_server_rejects_it():
+    import openai
+    from scout.config import load_settings
+    from scout.llm import LLM
+
+    sent = []
+
+    def create(**kw):
+        sent.append(kw)
+        if "extra_body" in kw and len(sent) == 1 and reject:
+            raise openai.BadRequestError("unknown field", response=httpx.Response(
+                400, request=httpx.Request("POST", "http://x")), body=None)
+        msg = SimpleNamespace(content="{}", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")], usage=None)
+
+    llm = LLM(load_settings())
+    llm._resolved_model = "m"
+    llm.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    for reject in (False, True):
+        sent.clear()
+        assert llm.chat("extractor", [{"role": "user", "content": "q"}], max_tokens=512, think=False).text == "{}"
+        assert sent[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+        assert len(sent) == (2 if reject else 1)
+        if reject:
+            assert "extra_body" not in sent[-1]                        # the plain retry
+
+
+# -- eval runner repeats ------------------------------------------------------------------------------
+
+def test_runner_repeats_each_with_its_own_library(tmp_path, monkeypatch):
+    import os
+    import scout.llm
+    from evals import phase_tasks as pt
+
+    libs = []
+
+    def fake_run_one(task, llm):
+        libs.append((task["id"], os.environ["SCOUT_LIBRARY_DIR"]))
+        return pt.Outcome(task["id"], task["phase"], status="done", passed=task["id"] != "r11-dead-pdf-link")
+    monkeypatch.setattr(pt, "ROOT", tmp_path)
+    monkeypatch.setattr(pt, "run_one", fake_run_one)
+    monkeypatch.setattr(scout.llm, "LLM", lambda: SimpleNamespace(model_for=lambda role: "m"))
+    code = pt.main(["--only", "r01-known-paper-pdf,r11-dead-pdf-link", "--repeats", "2"])
+    assert code == 1                                                    # 50% < 75%
+    assert [t for t, _ in libs] == ["r01-known-paper-pdf", "r11-dead-pdf-link"] * 2
+    assert len({lib for _, lib in libs}) == 2 and libs[0][1].endswith("library-1") and libs[2][1].endswith("library-2")
+    summary = next(tmp_path.glob("results/*-tasks/summary.md")).read_text()
+    assert "| r01-known-paper-pdf | 2/2 |" in summary and "| r11-dead-pdf-link | 0/2 |" in summary
+    assert "r01-known-paper-pdf (#2)" in summary

@@ -232,3 +232,15 @@ The first full run after the resilience work (retries and circuit breakers, fall
 - **Verification is the biggest time cost:** 1.5–4.5 min per task, even when the report has no content claims to check ("0 claims checked"). It runs once per task with saved items. Open item: skip it for metadata-only objectives, or give the extractor a smaller reasoning budget.
 - **Fallbacks earn their place.** r02's publisher PDFs (MDPI, ScienceDirect, De Gruyter) returned 403 or paywalls; the agent switched to arXiv and an open repository and met the objective. r12 passed with OpenAlex made unreachable.
 - **Crash survival works end to end** (r13): interrupted mid-turn, resumed from `task.json`, no duplicates, honest report.
+
+**Second full run (2026-11-18): 11/15.** The five fixed tasks all passed. The four failures (r02, r05, r06, r12) were all over the step budget with correct output, and all came from the verifier, which now worked:
+
+| Cause | Fix |
+| --- | --- |
+| Unsupported claims went back to the planner, which started new research to back them (r05 +4 steps, r06 +11) | The feedback says "fix the report, not the research", and the next turn offers **only** `finish` (enforced in code: the model ignored the instruction once) |
+| The check was logged as a step, using the agent's budget (r02 and r12 were one step over) | It is a check by Scout, not an agent action: recorded in `state.verification` of the task record, not in `steps` |
+| Each check took about 5 minutes of model reasoning | It runs with reasoning off (`LLM.chat(think=False)`, Qwen's `enable_thinking` via `chat_template_kwargs`; a server that rejects it gets a plain call): 48 s instead of 290 s on the same report, same verdicts |
+
+Rerun of the four: r02, r06, r12 pass; **r05 is flaky** at its 12-step budget (10, 12, 17, 14 and 17 steps in five runs). Its target page moved (the old strategy page now returns 404), and the agent fetches several EU pages before saving. Not tuned further: the gate's pass rate over repeats is meant to absorb this; r05 is the first candidate if the gate falls short.
+
+`python -m evals.phase_tasks --repeats 3` runs the set three times, each repeat with an empty library of its own, and adds a per-task pass count to the summary.

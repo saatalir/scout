@@ -75,8 +75,44 @@ def test_unsupported_claim_goes_back_once_then_corrected_report_is_accepted():
                                "verdict": "unsupported", "evidence": ""}]}])
     assert rec.status == "done" and "90%" not in rec.report
     tool_msgs = [m["content"] for m in rec.messages if m["role"] == "tool"]
-    assert any("not supported by the sources" in t and "90%" in t for t in tool_msgs)
-    assert [s.tool for s in rec.steps].count("verify_report") == 1             # checked once, not every finish
+    assert any("not supported by the sources" in t and "90%" in t and "Do not start new searches" in t
+               for t in tool_msgs)
+    assert len(_.extractor_prompts) == 1                                         # checked once, not every finish
+    assert rec.state["verification"]["unsupported"] == ["Salt caverns hold 90% of Europe's hydrogen"]
+    assert [s.tool for s in rec.steps] == ["save_to_library", "finish"]          # the check is not an agent step
+    assert "finish_only_next" not in rec.state
+
+
+def test_after_feedback_only_finish_is_offered():
+    offered = []
+
+    class Spy(Fake):
+        def chat(self, role, messages, **kw):
+            if role == "planner":
+                offered.append([t["function"]["name"] for t in kw.get("tools") or []])
+            return super().chat(role, messages, **kw)
+    llm = Spy([SAVE, [call("finish", report="[done] Salt caverns hold 90% of Europe's hydrogen.")],
+               [call("finish", report="[done] Salt caverns are gas-tight.")]],
+              [{"claims": [{"claim": "90% of Europe's hydrogen", "source": "S1", "verdict": "unsupported"}]}])
+    rec = Scout(TaskRecord.create("Summarise.", tor=False), llm=llm,
+                client_factory=lambda tor=False: httpx.Client(transport=httpx.MockTransport(handler)),
+                model_policy=RetryPolicy(attempts=2, base=0, sleep=lambda s: None)).run()
+    assert rec.status == "done" and offered[2] == ["finish"] and len(offered[0]) > 5
+
+
+def test_checker_runs_with_reasoning_off():
+    seen = {}
+
+    class Spy(Fake):
+        def chat(self, role, messages, **kw):
+            if role == "extractor":
+                seen.update(kw)
+            return super().chat(role, messages, **kw)
+    llm = Spy([SAVE, [call("finish", report="[done] Salt caverns are gas-tight.")]], [{"claims": []}])
+    Scout(TaskRecord.create("Summarise.", tor=False), llm=llm,
+          client_factory=lambda tor=False: httpx.Client(transport=httpx.MockTransport(handler)),
+          model_policy=RetryPolicy(attempts=2, base=0, sleep=lambda s: None)).run()
+    assert seen.get("think") is False
 
 
 def test_checker_failure_never_blocks_finishing():
