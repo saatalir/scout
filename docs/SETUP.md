@@ -198,6 +198,12 @@ sites see your address when Tor is off; downloads land here (still verified befo
 profiles use a mock keychain (no Keychain prompts), so their saved cookies and sign-ins are not encrypted at rest.
 Sign in to sites you care about in the VM profiles instead.
 
+Live check (2026-11-18, macOS, Brave): `browser_check.py local-research` (start, attach, page load) and a
+DuckDuckGo search through `local-research` passed; an agent task with `--where local --no-tor` opened two
+python.org pages in the local Brave, downloaded and verified a 12 MB zip and saved two library items (done in 8
+steps, 14 claims verified); `desktop_open` refuses with the local-mode message. Tor through a local tor service
+was not tried (no tor installed here).
+
 ## 5. The browser VM
 
 ### 5.1 Create the VM
