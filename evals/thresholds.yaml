@@ -21,3 +21,4 @@ roles:
 # pass every check. Proposed; set for real after the first baseline run.
 phase1_tasks: {pass_rate: 0.75}
 phase2_tasks: {pass_rate: 0.75}     # G2: phase-1 and phase-2 tasks together; same bar as G1
+phase3_tasks: {pass_rate: 0.75}     # G3: all tasks (phases 1-3); same bar as G1 and G2
