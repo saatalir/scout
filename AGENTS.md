@@ -26,7 +26,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 | --- | --- | --- |
 | `scout/config.py` | Settings from `.env` | `load_settings()`, `Settings`, `ROOT` |
 | `scout/llm.py` | Role-based model client | `LLM.chat(role, messages, tools=…, max_tokens=…) -> ChatResult` (`.text`, `.tool_calls`, `.raw`) |
-| `scout/browser/config.py` | Browser hosts, profiles, search settings; `${VAR:-default}` expansion | `load_browser_config()`, `parse_browser_config()`, `expand_env()`, `Host`, `Profile`, `SearchConfig`, `ConfigError` |
+| `scout/browser/config.py` | Browser hosts, profiles, search settings (incl. `where`: vm or local profile pair); `${VAR:-default}` expansion | `load_browser_config()`, `parse_browser_config()`, `expand_env()`, `Host`, `Profile`, `SearchConfig`, `ConfigError` |
 | `scout/browser/hosts.py` | Starting browsers: local, or over SSH via the VM helper plus a tunnel | `start_profile()`, `run_helper()`, `helper_start_args()`, `Endpoint`, `BrowserHostError` |
 | `scout/browser/session.py` | CDP attach; closes only Scout's own tabs on exit | `open_browser(profile, cfg)` (async context manager) → `BrowserSession` |
 | `scout/tools/search.py` | Engines, fallback, Tor choice | `web_search()`, `search_with()`, `resolve_tor()`, `TorChoiceRequired`, `ENGINES`, `SearchOutcome` |
@@ -130,6 +130,7 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_ROUTER` | `direct` / `litellm` | Whether Scout talks to Strata directly or through LiteLLM |
 | `STRATA_MODEL` | model id / `auto` | Pinned model. `auto` takes the first listed model; avoid it. |
 | `SCOUT_TOR` | `ask` / `on` / `off` | Default Tor mode for searches (§3 rule 3) |
+| `SCOUT_WHERE` | `vm` / `local` | Where the browsers run: the VM over SSH (default) or this machine (`search.where` picks the profile pair; no desktop locally; SETUP §4.4). `scout run/resume --where` overrides |
 | `SCOUT_VM_HOST`, `SCOUT_TAILNET`, `SCOUT_VM_USER`, `SCOUT_SSH_KEY` | strings | Where the browser VM is and how Scout logs in |
 | `SCOUT_TIMEZONE` | IANA name | Time zone for non-Tor profiles |
 | `SCOUT_SCRUB_PLACES`, `SCOUT_SCRUB_REGIONS` | comma lists | What `scrub_html` removes from captures |

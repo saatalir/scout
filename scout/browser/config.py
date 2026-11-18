@@ -16,6 +16,7 @@ DEFAULT_FILE = ROOT / "config" / "browsers.yaml"
 BROWSERS = ("brave", "chrome", "chromium")
 ENGINES = ("duckduckgo", "brave", "google")
 TOR_MODES = ("ask", "on", "off")
+WHERE_MODES = ("vm", "local")
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class SearchConfig:
     results_wanted: int = 10
     max_pages_per_engine: int = 3
     pause_seconds: tuple[float, float] = (2.0, 5.0)
+    where: str = "vm"                   # where the browsers run: vm | local
 
 
 @dataclass(frozen=True)
@@ -158,20 +160,49 @@ def parse_browser_config(raw: dict, source: Path = DEFAULT_FILE) -> BrowserConfi
     bad = [e for e in engines if e not in ENGINES]
     if bad:
         raise err(f"search: unknown engines {bad}; known: {ENGINES}")
+
     search_profile = s.get("profile", next(iter(profiles), ""))
     if search_profile and search_profile not in profiles:
         raise err(f"search: unknown profile {search_profile!r}")
     tor_profile = s.get("tor_profile") or None
     if tor_profile and tor_profile not in profiles:
         raise err(f"search: unknown tor_profile {tor_profile!r}")
+
+    # Where the browsers run: the VM over SSH (the default, isolated) or this
+    # machine. Local mode is only a different pair of search profiles; every
+    # caller already goes through cfg.search.profile / cfg.search.tor_profile.
+    where_mode = str(s.get("where", "vm") or "vm").strip().lower()
+    if where_mode not in WHERE_MODES:
+        raise err(f"search: where must be one of {WHERE_MODES}, got {where_mode!r} "
+                  f"(check SCOUT_WHERE in .env)")
+
+    def local_profile_key(key: str) -> str | None:
+        name = s.get(key) or None
+        if not name:
+            return None
+        if name not in profiles:
+            raise err(f"search: unknown {key} {name!r}")
+        if profiles[name].host.kind != "local":
+            raise err(f"search: {key} {name} must be on a local host")
+        return name
+
+    local_profile = local_profile_key("local_profile")
+    local_tor_profile = local_profile_key("local_tor_profile")
+    if where_mode == "local":
+        if not local_profile:
+            raise err("search: local_profile is required when where is 'local'")
+        search_profile = local_profile
+        tor_profile = local_tor_profile
+
     tor_mode = str(s.get("tor", "ask") or "ask").strip().lower()
     if tor_mode not in TOR_MODES:
         raise err(f"search: tor must be one of {TOR_MODES}, got {tor_mode!r} (check SCOUT_TOR in .env)")
     if tor_mode == "on" and not tor_profile:
         raise err("search: tor is 'on' but no tor_profile is set")
+
     pause = tuple(float(v) for v in s.get("pause_seconds", (2, 5)))
     search = SearchConfig(profile=search_profile, tor_profile=tor_profile, tor=tor_mode, engines=engines,
                           results_wanted=int(s.get("results_wanted", 10)),
                           max_pages_per_engine=int(s.get("max_pages_per_engine", 3)),
-                          pause_seconds=(pause[0], pause[-1]))
+                          pause_seconds=(pause[0], pause[-1]), where=where_mode)
     return BrowserConfig(hosts=hosts, profiles=profiles, search=search, source=source)

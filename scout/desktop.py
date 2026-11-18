@@ -51,7 +51,8 @@ def _run(coro):
 class Desktop:
     def __init__(self, profile: Profile, name: str):
         if profile.host.kind == "local":
-            raise hosts.BrowserHostError("the desktop runs on the browser VM: the configured host is local")
+            raise hosts.BrowserHostError("there is no disposable desktop in local mode (SCOUT_WHERE=local): "
+                                         "it runs only on the browser VM")
         self.profile, self.name = profile, name
         self.info: dict = {}
         self.tunnel: subprocess.Popen | None = None

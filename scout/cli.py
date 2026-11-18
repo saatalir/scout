@@ -2,18 +2,20 @@
 
     python -m scout run "Find 5 recent papers on hydrogen blending and download 2 PDFs"
     python -m scout run --tor "…"        # Tor on for this task (--no-tor: off)
+    python -m scout run --where local "…"  # browsers on this machine, not the VM
     python -m scout list
     python -m scout show <task id>
     python -m scout resume <task id>
 
 Tor (SCOUT_TOR): "ask" asks once at the start of the task; "on"/"off" decide;
---tor/--no-tor override. Approval gates ask on the terminal; without a
-terminal every approval is denied.
+--tor/--no-tor override. --where overrides SCOUT_WHERE for this task. Approval
+gates ask on the terminal; without a terminal every approval is denied.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from .browser import load_browser_config
@@ -58,6 +60,7 @@ def _print_result(rec: TaskRecord) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="scout", description="Online Scout: a local-first web research agent.")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    where_help = "where the browsers run (default: SCOUT_WHERE, else vm)"
     run = sub.add_parser("run", help="run a new task")
     run.add_argument("objective")
     g = run.add_mutually_exclusive_group()
@@ -66,15 +69,21 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--max-steps", type=int, default=40)
     run.add_argument("--approvals", choices=["ask", "auto", "deny"],
                      help="who approves irreversible actions (default: SCOUT_APPROVALS, else ask)")
+    run.add_argument("--where", choices=["vm", "local"], default=None, help=where_help)
     res = sub.add_parser("resume", help="continue a paused or unfinished task")
     res.add_argument("task_id")
     res.add_argument("--max-steps", type=int, default=40)
+    res.add_argument("--where", choices=["vm", "local"], default=None, help=where_help)
     show = sub.add_parser("show", help="print a task record")
     show.add_argument("task_id")
     sub.add_parser("list", help="list tasks")
     pro = sub.add_parser("promote", help="propose playbooks from flows that succeeded at least --min times (D4)")
     pro.add_argument("--min", type=int, default=2, dest="min_runs")
     a = ap.parse_args(argv)
+
+    # Set right after parsing: everything below may load the browser config.
+    if getattr(a, "where", None):
+        os.environ["SCOUT_WHERE"] = a.where
 
     if a.cmd == "promote":
         from . import promote

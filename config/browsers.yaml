@@ -62,6 +62,27 @@ profiles:
       - "--webrtc-ip-handling-policy=disable_non_proxied_udp"
       - "--disable-quic"
 
+  # The same two roles on this machine, used when search.where is local
+  # (SCOUT_WHERE=local). Visible Brave windows; stop_on_exit is false, so their
+  # data persists under ~/.scout/profiles/<name>.
+  local-research:
+    host: local
+    port: 9311
+
+  # Tor through a tor service on this machine (brew install tor &&
+  # brew services start tor). If tor is not running, a task with Tor on stops
+  # (TorUnavailable); it never falls back to direct.
+  local-research-tor:
+    host: local
+    port: 9312
+    proxy: socks5://127.0.0.1:9050
+    timezone: UTC
+    flags:
+      - "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
+      - "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+      - "--webrtc-ip-handling-policy=disable_non_proxied_udp"
+      - "--disable-quic"
+
   # One profile per site you sign in to keeps sessions apart. Example:
   # jobs:
   #   host: browser-vm
@@ -77,6 +98,11 @@ profiles:
     stop_on_exit: true
 
 search:
+  # Where Scout's browsers run: vm = the browser VM over SSH (the default, isolated);
+  # local = this machine (simpler; less isolation; see docs/SETUP.md).
+  where: ${SCOUT_WHERE:-vm}
+  local_profile: local-research
+  local_tor_profile: local-research-tor
   profile: research            # used when Tor is off
   tor_profile: research-tor    # used when Tor is on
   # Tor mode for searches that do not choose for themselves:

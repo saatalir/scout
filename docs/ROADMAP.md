@@ -39,6 +39,32 @@ Building with two models saves tokens without lowering quality:
 
 > **Why not an autonomous coding agent?** The first version ran opencode (an agentic coder, already set up for Strata) with `--auto` under a deny-by-default permission policy. A policy probe passed, but in the real smoke-test task the agent used absolute paths into the main checkout, wrote files there, and ran shell commands the policy should have denied, including `git stash` in the main checkout. No work was lost; the stash was restored within the run. Since the policy can't be relied on, the model gets no tools at all. Delegated code runs only in the sandbox, and only through the tests.
 
+### What the delegations showed (2026-11-18, seven packages)
+
+| Package | Work | Rounds | Review |
+| --- | --- | --- | --- |
+| A1–A4 | API adapters with fixture tests | 1–3 | Merged nearly as written |
+| B7 | Test fixture pages | 1 | Merged as written |
+| B6 | Consent library (a safety rule) | 2 | Tests passed, but its label rule could click "Accept non-essential"; rule rewritten |
+| D4 | Playbook promotion | 1 | 361 lines; review changed about 24, all privacy (typed values and task text kept; partly the spec's fault) |
+| Local mode | Config switch, profiles, CLI | 4 | Code right from round 2, about what Claude would write. Rounds 3–4 (most of 55 min) chased a test that already failed in the sandbox; the harness also mangled `.env.example`. Both were harness faults, now fixed |
+
+Strata reliably meets the letter of the spec and the tests. It misses intent the spec leaves unstated
+(safety, privacy), never questions a flawed spec, and repeats itself a little. The gap is judgment, not code.
+
+**Rules for delegating:**
+
+1. **Delegate by kind:** mechanical work with an obvious test (adapters, parsers, fixtures, glue, config).
+   Keep gates, Tor, approvals, privacy and design with Claude: reviewing them costs as much as writing them.
+2. **Delegate by size:** the spec and the review cost Claude about the same whatever the size; below about
+   150 lines, writing it directly is as cheap. Delegate small work only to save Claude's session budget.
+3. **State intent, not just the API:** say what must never happen ("never keep a typed value; it may be the
+   user's phone number"). Both safety misses came from intent the spec left out.
+4. **Write the key tests in the spec:** the tests are where quality lives; Strata hits the target it is given.
+5. **Review by risk:** read the safety- and privacy-relevant lines closely, skim the rest.
+6. **Harness:** tests that fail on the unchanged copy are recorded as `failing_before` and ignored, and Strata
+   is told not to chase them; dotfile paths are kept.
+
 The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U]** marks something only the user can do.
 
 ---

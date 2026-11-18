@@ -336,7 +336,7 @@ class Scout:
         res = {"results": [{"title": r.title, "url": r.url, "snippet": r.snippet[:300]} for r in out.results],
                "tor": out.tor}
         if out.needs_human:
-            res["needs_human"] = f"Every search engine showed a bot check. A person can solve it at {out.live_view}."
+            res["needs_human"] = f"Every search engine showed a bot check. A person can solve it " + (f"at {out.live_view}." if out.live_view else "in the browser window on this machine.")
         return res
 
     def _try_download(self, client: httpx.Client, url: str, a: dict) -> web.Download:
@@ -894,7 +894,9 @@ class Scout:
                 live = self._browser.live_view if self._browser is not None else None
                 st["handed_over"] = {"reason": reason, "url": st.get("browser_url"), "live_view": live}
                 rec.status = "needs_human"
-                rec.report = reason + (f"\n\nTake over in the live view: {live}" if live else "") + (
+                rec.report = reason + (f"\n\nTake over in the live view: {live}" if live else
+                                       "\n\nTake over in the browser window on this machine." if self._browser is not None
+                                       else "") + (
                     f"\nThe browser is at {st['browser_url']}." if st.get("browser_url") else "") + (
                     f"\nWhen done, run `python -m scout resume {rec.id}`: Scout continues from there.")
                 rec.log("hand_to_human", args, True, reason)

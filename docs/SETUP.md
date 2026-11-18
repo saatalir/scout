@@ -180,6 +180,24 @@ Scout passes `-i <key> -o IdentitiesOnly=yes -o BatchMode=yes`, so SSH never fal
 
 ---
 
+### 4.4 Local mode (no VM)
+
+`SCOUT_WHERE=local` in `.env` (or `python -m scout run --where local …` for one task) runs every browser
+operation on this machine instead of the browser VM. Nothing else changes: the same tools, gates, retries, task
+record and library. The default is `vm`.
+
+| | VM (`vm`) | This machine (`local`) |
+| --- | --- | --- |
+| Browsers | Brave on the VM over SSH (`research`, `research-tor`) | Brave here, in a visible window (`local-research`, `local-research-tor`); data in `~/.scout/profiles/` |
+| Tor | The VM's tor service | A tor service here: `brew install tor && brew services start tor`. If it is not running, a task with Tor on stops; it never falls back to direct |
+| Disposable desktop | Yes (rootless podman) | No: `desktop_open` says so and the task continues in the browser, where the vision tools still work |
+| Hand-off (sign-ins, bot checks) | The noVNC live view | The Brave window on your screen |
+
+What local mode gives up: pages run on your own network (they can reach your LAN and services on this machine);
+sites see your address when Tor is off; downloads land here (still verified before the library); and local
+profiles use a mock keychain (no Keychain prompts), so their saved cookies and sign-ins are not encrypted at rest.
+Sign in to sites you care about in the VM profiles instead.
+
 ## 5. The browser VM
 
 ### 5.1 Create the VM

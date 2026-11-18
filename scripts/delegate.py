@@ -118,6 +118,24 @@ def run_tests(copy: Path, tests: list[str]) -> tuple[bool, str]:
     return r.returncode == 0, out
 
 
+FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.M)
+
+
+def failures(out: str) -> set[str]:
+    """Test ids pytest reports as failed or errored (the short summary)."""
+    return {f.split(" - ")[0] for f in FAILED_RE.findall(out)}
+
+
+def baseline(copy: Path, tests: list[str]) -> set[str]:
+    """Tests that already fail on the unchanged copy (e.g. one that cannot run in the sandbox). The model cannot
+    fix them and must not be sent rounds chasing them; a round passes when it fails nothing beyond these."""
+    existing = [t for t in tests if (copy / t.split("::")[0]).exists()]
+    if not existing:
+        return set()
+    ok, out = run_tests(copy, existing)
+    return set() if ok else failures(out)
+
+
 def prompt_for(meta: dict, body: str, copy: Path) -> str:
     parts = [f"THE SPEC:\n{body}\n", f"Files you may create or change: {', '.join(meta['files'])}",
              f"Tests that must pass: {' '.join(meta['tests'])}\n"]
@@ -136,7 +154,9 @@ def prompt_for(meta: dict, body: str, copy: Path) -> str:
 def apply_files(meta: dict, copy: Path, text: str) -> tuple[list[str], list[str]]:
     written, refused = [], []
     for m in FILE_BLOCK.finditer(text):
-        rel = m.group("path").strip().lstrip("./")
+        rel = m.group("path").strip().lstrip("/")
+        while rel.startswith("./"):                                # "./x", not ".env": keep dotfiles
+            rel = rel[2:]
         body = m.group("body")
         body = re.sub(r"^```[a-z]*\n|\n```$", "", body)          # tolerate fences despite the instructions
         if ".." in Path(rel).parts or not allowed(meta, rel):
@@ -158,6 +178,12 @@ def start(name: str, rounds: int) -> int:
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt_for(meta, body, copy)}]
     result = {"name": name, "rounds": 0, "passed": False, "files": [], "refused": []}
     t0 = time.time()
+    known = baseline(copy, meta["tests"])
+    if known:
+        result["failing_before"] = sorted(known)
+        print(f"baseline: {len(known)} test(s) already fail unchanged, ignored: {sorted(known)}", flush=True)
+        messages[-1]["content"] += ("\n\nThese tests already fail before your change (the sandbox cannot run them); "
+                                    "ignore them, do not try to fix them: " + ", ".join(sorted(known)))
     for n in range(1, rounds + 1):
         print(f"round {n}: asking Strata…", flush=True)
         r = llm.chat("planner", messages, max_tokens=24000, temperature=0.0)
@@ -172,6 +198,8 @@ def start(name: str, rounds: int) -> int:
                                                         "the === FILE: path === / === END FILE === format."})
             continue
         ok, out = run_tests(copy, meta["tests"])
+        if not ok and known and failures(out) and failures(out) <= known:
+            ok = True                                          # only the tests that failed before
         print(f"round {n}: wrote {written}{' refused ' + str(refused) if refused else ''}; "
               f"tests {'PASS' if ok else 'FAIL'}: {out.splitlines()[-1] if out else ''}", flush=True)
         result["rounds"] = n
@@ -191,6 +219,10 @@ def check(name: str) -> int:
     copy = copy_dir(name)
     res = json.loads((copy / ".delegate" / "result.json").read_text())
     ok, out = run_tests(copy, meta["tests"])
+    known = set(res.get("failing_before", []))
+    if not ok and known and failures(out) and failures(out) <= known:
+        ok = True
+        print(f"(only tests that failed before the change: {sorted(known)})")
     print(f"files: {res['files']}\nrefused (outside the spec): {res['refused'] or 'none'}")
     print(f"rounds: {res['rounds']}, {res.get('minutes')} min")
     print(f"tests (sandboxed): {'PASS' if ok else 'FAIL'} — {out.splitlines()[-1] if out else ''}")
