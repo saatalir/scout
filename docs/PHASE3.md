@@ -103,5 +103,17 @@ params, check runs, selects, replay through `run_playbook`, writing and skipping
 
 Live, 2026-11-18, before G3: v01 (canvas chart) passed: the page result flagged the canvas, `vision_look` read
 January to July, and the agent cross-checked the sample's source. v02 passed without vision: its download button is
-a link to the file. f01 from a promoted playbook passed (§4). The desktop round trip runs offline; live once
-`setup.sh` has installed podman and the image on the VM.
+a link to the file. f01 from a promoted playbook passed (§4).
+
+**Desktop, live on the VM (2026-11-18, rootless podman 4.9.3):**
+
+| Check | Result |
+| --- | --- |
+| Start → screenshot → act → stop | Started in about 4 s; 1280×800 screenshots; clicks and keys change the screen; the container is gone after stop |
+| Live view | noVNC answers through Scout's SSH tunnel |
+| An agent task on the desktop | "Open the Chart.js bar sample in the desktop, read the x-axis labels": `desktop_open`, `vision_look` (January–July), `desktop_close`; done, 4 claims verified |
+| Vision click → download → copy out | The vision role found "File 1" on the Selenium download page (43 s); the desktop's browser downloaded `file_1.txt`; Scout copied it out and it passed verification |
+| Isolation | From inside the desktop, the VM's DevTools port (`10.0.2.2:9301`) is unreachable (`ERR_ADDRESS_UNREACHABLE`); the internet is reachable |
+
+The first live start found two bugs, both fixed: the tmpfs home was owned by root (Chromium could not start;
+the helper now mounts it with podman's `U` option), and `desktop_close` failed when nothing had been downloaded.
