@@ -127,7 +127,7 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 | X2 | Task trace files (jsonl per task: every model turn and tool call, with timings) for debugging and promotion | C | Feeds D4 |
 | X3 | Model router (LiteLLM) and queue/swap scheduler | — | **Deferred**: every role passes on Strata; reopen if a role ever moves |
 | X4 | Strata version pinning plus an eval rerun before any Strata upgrade (design risk "Strata changes often") | C + U | Record the version in eval results |
-| X5 | Clean-up of the unused headless VM `scout-browser` on lala (4 GB RAM) | U | Your call |
+| X5 | Clean-up of the unused headless VM `scout-browser` on the old VM host (4 GB RAM) | U | Your call |
 
 ---
 
