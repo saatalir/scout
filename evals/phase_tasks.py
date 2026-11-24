@@ -3,6 +3,7 @@
     python -m evals.phase_tasks                    # every phase-1 task
     python -m evals.phase_tasks --only r01-known-paper-pdf,r07-duplicate
     python -m evals.phase_tasks --skip-needs browser  # without the browser VM
+    python -m evals.phase_tasks --phase 4 --phase-only --repeats 3   # gate G4: the open-ended tasks (rigor per task)
 
 Each run gets its own library inbox and task folder under results/<ts>-tasks/,
 so runs never mix and order-dependent tasks (`after`) see the earlier task's
@@ -53,6 +54,44 @@ class Outcome:
 def _greek_share(text: str) -> float:
     letters = [c for c in text if c.isalpha()]
     return sum("Ͱ" <= c <= "Ͽ" or "ἀ" <= c <= "῿" for c in letters) / max(1, len(letters))
+
+
+CONFLICT_WORDS = ("contradict", "disagree", "conflict", "disput", "contested", "controvers", "critic", "debate",
+                  "refut", "failed to replicate", "not replicated", "could not be replicated", "on the other side")
+
+
+def _independent_sources(rec) -> int:
+    from scout.independence import count_independent
+    from scout.verify import gather_all_sources
+    sources = gather_all_sources(rec.files, list(rec.state.get("evidence", [])))
+    return count_independent([{"url": s["url"], "text": s["text"]} for s in sources])
+
+
+def _confidence_rows(report: str) -> list[str]:
+    """The confidence column of the findings table (RG5): 'high', 'medium', 'low' per row."""
+    part = report.split("## findings and confidence", 1)
+    if len(part) < 2:
+        return []
+    rows = [r for r in part[1].splitlines() if r.startswith("|") and not r.startswith("| finding")
+            and not r.startswith("| ---")]
+    out = []
+    for r in rows:
+        cells = [c.strip() for c in r.strip("|").split("|")]
+        if len(cells) >= 2:
+            out.append(cells[1].split(" ")[0])
+    return [c for c in out if c in ("high", "medium", "low")]
+
+
+def _campaign_ok(rec) -> bool:
+    """G4's campaign test: it paused and resumed, the transcript was compacted, every session but the last added
+    something (unless saturation ended it), and the campaign ended (finished, saturation or max sessions)."""
+    c = rec.state.get("campaign") or {}
+    done = [s for s in c.get("sessions", []) if "ended" in s]
+    if len(done) < 2 or not (rec.dir / "sessions" / "transcript-1.json").exists():
+        return False
+    by_saturation = "nothing new" in (c.get("ended") or "")
+    added = all(s["added"].get("evidence", 0) + s["added"].get("files", 0) > 0 for s in done[:-1])
+    return (added or by_saturation) and (rec.status == "done" or bool(c.get("ended")))
 
 
 def evaluate(task: dict, rec, items: list[dict], files_before: int, files_after: int,
@@ -110,16 +149,35 @@ def evaluate(task: dict, rec, items: list[dict], files_before: int, files_after:
             out["no_duplicate_items"] = len(keys) == len(set(keys))
         elif kind == "max_steps":
             out[f"max_steps {spec}"] = len(rec.steps) <= spec
+        # RG7: open-ended research (computed from the record and the report, never model-graded)
+        elif kind == "report_has_facts":
+            for words in spec:                     # each inner list: the report has at least one of them
+                out[f"fact {words[0]!r}"] = any(w.lower() in report for w in words)
+        elif kind == "min_independent_sources":
+            out[f"min_independent_sources {spec}"] = _independent_sources(rec) >= spec
+        elif kind == "findings_have_confidence":
+            out["findings_have_confidence"] = bool(_confidence_rows(report))
+        elif kind == "not_all_high":
+            rows = _confidence_rows(report)
+            out["not_all_high"] = bool(rows) and any(r != "high" for r in rows)
+        elif kind == "counter_search_done":
+            out["counter_search_done"] = any(s.get("purpose") == "counter" for s in rec.state.get("searches", []))
+        elif kind == "report_mentions_conflict":
+            out["report_mentions_conflict"] = any(w in report for w in CONFLICT_WORDS)
+        elif kind == "campaign":
+            out["campaign"] = _campaign_ok(rec)
         else:
             out[f"unknown check {kind}"] = False
     if "needs_human" not in (task.get("checks") or {}):
-        out["finished"] = rec.status == "done"
+        # open-ended tasks may end on their budget with an honest, labelled report (R7)
+        out["finished"] = rec.status == "done" or (bool(task.get("allow_partial")) and rec.status == "partial")
     return out
 
 
 # -- run ------------------------------------------------------------------------------
 
-def run_one(task: dict, llm) -> Outcome:
+def run_one(task: dict, llm, rigor: str | None = None) -> Outcome:
+    from scout import campaign
     from scout.agent import Scout
     from scout.library import _read_index, items_for_task, library_dir
     from scout.task import TaskRecord
@@ -127,6 +185,13 @@ def run_one(task: dict, llm) -> Outcome:
     o = Outcome(task_id=task["id"], phase=task["phase"])
     approvals: list[tuple[int, str]] = []
     rec = TaskRecord.create(task["objective"], tor=bool(task.get("tor")))
+    level = rigor or task.get("rigor")
+    if level:
+        rec.state["rigor"] = level
+    sessions = task.get("sessions")
+    if sessions:
+        campaign.configure(rec.state, minutes=sessions["minutes"], max_sessions=sessions["n"])
+    rec.save()
 
     def approve(summary: str) -> bool:
         approvals.append((len(rec.steps) + 1, summary))
@@ -158,7 +223,15 @@ def run_one(task: dict, llm) -> Outcome:
                 pass
             rec = TaskRecord.load(rec.id)
             o.status = f"interrupted at step {len(rec.steps)}"
-        rec = Scout(rec, llm=llm, ask_approval=approve, max_steps=budget).run()
+        if sessions:
+            # G4 campaign test: sessions until the campaign ends (max_sessions bounds it)
+            for _ in range(sessions["n"] + 1):
+                rec = Scout(TaskRecord.load(rec.id), llm=llm, ask_approval=approve, max_steps=budget,
+                            session_minutes=sessions["minutes"]).run()
+                if rec.status != "paused":
+                    break
+        else:
+            rec = Scout(rec, llm=llm, ask_approval=approve, max_steps=budget).run()
     except Exception as e:  # noqa: BLE001
         o.error = f"{type(e).__name__}: {e}"
     o.seconds = round(time.perf_counter() - t0, 1)
@@ -179,6 +252,9 @@ def run_one(task: dict, llm) -> Outcome:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", type=int, default=1, help="run tasks of this phase and earlier")
+    ap.add_argument("--phase-only", action="store_true", help="only the tasks of --phase itself")
+    ap.add_argument("--rigor", choices=["quick", "standard", "thorough"],
+                    help="run every task at this rigor (default: each task's own, else quick)")
     ap.add_argument("--only", help="comma list of task ids")
     ap.add_argument("--skip-needs", default="", help="comma list: skip tasks needing these (browser, approval)")
     ap.add_argument("--repeats", type=int, default=1,
@@ -192,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(ROOT))
     from scout.llm import LLM
 
-    tasks = [t for t in load_tasks() if t["phase"] <= a.phase]
+    tasks = [t for t in load_tasks() if (t["phase"] == a.phase if a.phase_only else t["phase"] <= a.phase)]
     if a.only:
         wanted = set(a.only.split(","))
         tasks = [t for t in tasks if t["id"] in wanted]
@@ -206,11 +282,11 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["SCOUT_LIBRARY_DIR"] = str(out_dir / f"library-{rep}")
             os.environ["SCOUT_TASKS_DIR"] = str(out_dir / f"tasks-{rep}")
             print(f"Repeat {rep}/{a.repeats}")
-        outcomes += run_set(tasks, llm, skip, out_dir, rep)
+        outcomes += run_set(tasks, llm, skip, out_dir, rep, a.rigor)
     return summarise(outcomes, a, llm, out_dir)
 
 
-def run_set(tasks: list[dict], llm, skip: set[str], out_dir: Path, rep: int) -> list[Outcome]:
+def run_set(tasks: list[dict], llm, skip: set[str], out_dir: Path, rep: int, rigor: str | None = None) -> list[Outcome]:
     outcomes: list[Outcome] = []
     done: set[str] = set()
     for t in tasks:
@@ -222,7 +298,7 @@ def run_set(tasks: list[dict], llm, skip: set[str], out_dir: Path, rep: int) -> 
             outcomes.append(Outcome(t["id"], t["phase"], status="skipped", error="dependency did not run"))
             print(f"  SKIP  {t['id']}  (after {t['after']})")
             continue
-        o = run_one(t, llm)
+        o = run_one(t, llm, rigor)
         o.repeat = rep
         done.add(t["id"])
         outcomes.append(o)

@@ -25,6 +25,16 @@
 #     needs_human:        true                                          the task stopped for a human (sign-in)
 #     max_steps:          n                                             finished within n tool steps
 #     no_duplicate_items: true                                          no two saved items share a DOI/arXiv id/URL
+#     report_has_facts:   [[a, b], [c]]                                 each inner list: the report has one of them
+#     min_independent_sources: n                                        independent sources among items + evidence (RG6)
+#     findings_have_confidence: true                                    the report has the findings table (RG5)
+#     not_all_high:       true                                          some finding is labelled medium or low
+#     counter_search_done: true                                         a search with purpose "counter" ran (RG4)
+#     report_mentions_conflict: true                                    the report names a disagreement between sources
+#     campaign:           true                                          paused, compacted, resumed, added each time, ended
+#   rigor            quick | standard | thorough for that task (phase 4: the rigor gate G4)
+#   allow_partial    the task passes "finished" when it ends on its budget with a labelled report (R7)
+#   sessions         {n, minutes}: run as a campaign of up to n sessions of that length (RG8/RG9)
 #   env              environment variables set for that task only (e.g. SCOUT_CHAOS_DOWN fault injection)
 #   interrupt_after  stop the task after n steps, then resume it from its saved record (crash survival)
 
@@ -273,3 +283,134 @@ tasks:
     needs: [browser]
     checks:
       verified_files: {n: 1, kind: any}
+
+  # ---------------------------------------------------------------- phase 4: open-ended research (gate G4)
+  # Answer keys written in advance (2026-11-24); no model grading (the grader would be the agent's own model).
+  - id: o01-salt-caverns
+    phase: 4
+    rigor: thorough
+    allow_partial: true
+    objective: >-
+      What is known about storing hydrogen in underground salt caverns: where is it done today,
+      and what are the main risks?
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      report_has_facts:
+        - [teesside]
+        - [texas, gulf coast, clemens, moss bluff, spindletop]
+        - [microb, bacteri]
+        - [well integrity, wellbore, casing, cement, embrittlement]
+      min_independent_sources: 5
+      findings_have_confidence: true
+      counter_search_done: true
+
+  # single-source trap: the first reports said yes; the replications said no
+  - id: o02-lk99-trap
+    phase: 4
+    rigor: thorough
+    allow_partial: true
+    objective: >-
+      In 2023 a team claimed that LK-99 is a superconductor at room temperature and ambient
+      pressure. Is it? What did later work find?
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      report_has_facts:
+        - [copper sulfide, copper sulphide, cu2s, cu₂s]
+        - [not a superconductor, no superconductivity, not superconducting, is not a superconductor, insulator]
+      report_mentions_conflict: true
+      findings_have_confidence: true
+      counter_search_done: true
+
+  # controversy: both sides, each with its sources
+  - id: o03-gas-stoves
+    phase: 4
+    rigor: thorough
+    allow_partial: true
+    objective: >-
+      Do gas stoves harm health through indoor air pollution? Give the evidence on both sides,
+      with the sources for each.
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      report_has_facts:
+        - [nitrogen dioxide, no2, no₂]
+        - [asthma]
+      report_mentions_conflict: true
+      findings_have_confidence: true
+      counter_search_done: true
+      min_independent_sources: 5
+
+  # little evidence: a pass needs honest uncertainty, not invented certainty
+  - id: o04-thin-evidence
+    phase: 4
+    rigor: thorough
+    allow_partial: true
+    objective: >-
+      What are the health effects of taking ashwagandha supplements every day for more than
+      five years?
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      report_has_facts:
+        - [limited, lack of, few studies, no long-term, insufficient, scarce, little evidence, not been studied, unknown, could not be settled]
+        - [liver, hepat]
+      findings_have_confidence: true
+      not_all_high: true
+      counter_search_done: true
+
+  - id: o05-repositories
+    phase: 4
+    rigor: thorough
+    allow_partial: true
+    objective: >-
+      Which countries have a deep geological repository for spent nuclear fuel that is operating
+      or under construction, and what is the status of each?
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      report_has_facts:
+        - [onkalo, finland]
+        - [forsmark, sweden]
+        - [cigéo, cigeo, bure, france, switzerland, canada]
+      min_independent_sources: 5
+      findings_have_confidence: true
+      counter_search_done: true
+
+  - id: o06-perovskite-stability
+    phase: 4
+    rigor: thorough
+    allow_partial: true
+    objective: >-
+      How stable are perovskite solar cells compared with silicon cells today, and what are the
+      main causes of their degradation?
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      report_has_facts:
+        - [moisture, humidity, water]
+        - [heat, thermal, temperature]
+        - [ion migration, ionic migration, halide migration, ion movement, mobile ions]
+        - [25 years, 25-year, 30 years, 30-year, decades]
+      min_independent_sources: 5
+      findings_have_confidence: true
+      counter_search_done: true
+
+  # the campaign test: three short sessions, paused and resumed from compacted notes
+  - id: c01-campaign
+    phase: 4
+    rigor: standard
+    allow_partial: true
+    sessions: {n: 3, minutes: 10}
+    objective: >-
+      Follow what is published about sodium-ion batteries for grid storage: which companies
+      make or deploy them, and how they compare with lithium iron phosphate (LFP) batteries.
+    tor: false
+    needs: [api, web, browser]
+    checks:
+      campaign: true
+      report_has_facts:
+        - [catl, hina, natron, byd, faradion, peak energy]
+        - [lfp, lithium iron phosphate, lifepo]
+      findings_have_confidence: true

@@ -223,7 +223,7 @@ def test_runner_repeats_each_with_its_own_library(tmp_path, monkeypatch):
 
     libs = []
 
-    def fake_run_one(task, llm):
+    def fake_run_one(task, llm, rigor=None):
         libs.append((task["id"], os.environ["SCOUT_LIBRARY_DIR"]))
         return pt.Outcome(task["id"], task["phase"], status="done", passed=task["id"] != "r11-dead-pdf-link")
     monkeypatch.setattr(pt, "ROOT", tmp_path)

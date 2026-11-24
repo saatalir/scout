@@ -25,7 +25,7 @@ from .library import Item, find_existing, read_front_matter, save_item
 from .llm import LLM
 from .net import http_client
 from .resilience import DeadlineExceeded, Deadline, RetryPolicy, is_transient, run_with_time_limit
-from . import evidence, sufficiency
+from . import campaign, evidence, sufficiency
 from .task import TaskRecord
 from .tools import academic, web
 
@@ -216,11 +216,20 @@ RIGOR_NOTES = {
                  f"may finish, Scout checks in code that: (1) you read at least {sufficiency.MIN_SITES} independent sites "
                  "(different organisations, not copies); (2) you ran at least one counter-search (web_search or "
                  "search_papers with purpose \"counter\") for criticism, disagreement or newer contradicting data, and "
-                 "you report conflicts with both sides' sources; (3) your last searches stopped finding new sites or "
-                 "papers; (4) each finding is supported by at least two independent sources. A finish that misses a "
+                 "you report conflicts with both sides' sources; (3) your last searches mostly returned sites and "
+                 "papers you had already seen; (4) each finding is supported by at least two independent sources. A finish that misses a "
                  "rule is sent back with what is missing. For a broad question, split its facets with "
                  "research_subtasks."),
 }
+
+
+SESSION_NOTES_TOOL = _tool(
+    "session_notes", "Write the progress notes the next session of this campaign starts from (it will not see this "
+    "conversation).",
+    {"notes": {"type": "string", "description": (
+        "Markdown with four sections: ## Covered (what is established, with its sources), ## Still needed (per part "
+        "of the objective), ## Open leads (URLs, names, papers, organisations to follow), ## Next searches (queries "
+        "to try, including counter-searches).")}}, ["notes"])
 
 
 class ModelUnavailable(RuntimeError):
@@ -257,7 +266,8 @@ class Scout:
                  model_policy: RetryPolicy | None = None, tools: list[dict] | None = None,
                  save_task_id: str | None = None, verify: bool = True,
                  browser_profile: str | None = None, browser_setup: Callable[..., Any] | None = None,
-                 approvals: "ApprovalPolicy | None" = None, desktop_profile: str | None = None):
+                 approvals: "ApprovalPolicy | None" = None, desktop_profile: str | None = None,
+                 session_minutes: float | None = None):
         if record.tor is None:
             raise ValueError("record.tor must be decided (ask the user) before the task runs")
         self.rec = record
@@ -288,6 +298,11 @@ class Scout:
                 self.max_steps = THOROUGH_STEPS
             if task_minutes == TASK_MINUTES:
                 self.deadline = Deadline(THOROUGH_MINUTES * 60)
+        # RG8: a campaign session has its own time box; max_steps then counts this session's steps only
+        self.session_minutes = session_minutes
+        if session_minutes:
+            self.deadline = Deadline(session_minutes * 60)
+        self.step_base = 0
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
         st.setdefault("fail_streak", 0)
@@ -759,9 +774,16 @@ class Scout:
             self._nudge("Reflection: no new items for a while. Re-read the objective, list what is still missing, "
                         "and take the most direct step toward it — or finish with an honest report if it is done.")
             self.notify("reflection: no progress")
-        steps_left = self.max_steps - len(self.rec.steps)
+        steps_left = self.max_steps - self._used()
         if not st["wrapup_sent"] and (steps_left <= max(3, self.max_steps // 8) or self.deadline.fraction_used() >= 0.85):
             st["wrapup_sent"] = True
+            if self.session_minutes:
+                self._nudge(f"Session almost over ({steps_left} steps left, {max(0, self.deadline.remaining()) / 60:.0f} "
+                            "min left). Save what is worth keeping. When the session ends you will write progress "
+                            "notes and the next session continues from them; call finish only if the whole objective "
+                            "is done.")
+                self.notify("session wrap-up requested")
+                return
             self._nudge(f"Budget almost used ({steps_left} steps left, "
                         f"{max(0, self.deadline.remaining()) / 60:.0f} min left). Save what you have and finish "
                         "with an honest report.")
@@ -796,7 +818,8 @@ class Scout:
             rec.report = f"{rec.report}\n\n{self._findings_section()}{note}"
         rec.report += self._rules_line()
         rec.report += self._record_line()
-        rec.status = "partial" if rec.files else "failed"
+        found = rec.files or (self.rigor != "quick" and st.get("evidence"))
+        rec.status = "partial" if found else "failed"
 
     def _check_report(self, report: str) -> Any:
         """VF at rigor quick (claims against the saved library items); RG2 at standard/thorough (every supporting
@@ -850,6 +873,98 @@ class Scout:
         return (f"\n\n_Task record: {n} item{'s' if n != 1 else ''} saved to the library by this task, "
                 f"{with_file} with a verified file._")
 
+    # -- campaigns (RG8, RG9) ---------------------------------------------------------------------------
+    def _used(self) -> int:
+        """Steps used against max_steps: the whole task's, or this session's in a campaign."""
+        return len(self.rec.steps) - self.step_base
+
+    def _titles(self) -> list[str]:
+        out = []
+        for f in self.rec.files:
+            try:
+                m = read_front_matter(Path(f))
+            except OSError:
+                continue
+            ident = m.get("doi") or m.get("arxiv") or m.get("source_url") or ""
+            out.append(f"{m.get('title') or Path(f).stem}" + (f" ({ident})" if ident else ""))
+        return out
+
+    def _begin_session(self) -> bool:
+        """Open a session: end the campaign first if its limits are reached; compact the transcript of earlier
+        sessions (RG9); reset the per-session loop state. Returns True when the task ended instead."""
+        rec, st = self.rec, self.rec.state
+        c = campaign.campaign(st)
+        why = None if c.get("ended") else campaign.ended_reason(st)
+        if why:
+            c["ended"] = why
+            self.notify(f"campaign over: {why}")
+            self._final_report(f"Campaign ended: {why}.")
+            rec.save()
+            return True
+        if campaign.open_session(st) is not None:          # the last session died without closing
+            campaign.end_session(st, files=rec.files, steps=len(rec.steps), ended_by="interrupted",
+                                 notes=None if c.get("notes") else campaign.fallback_notes(st, self._titles()))
+        n = len(c["sessions"]) + 1
+        if n > 1 and rec.messages:
+            campaign.archive_transcript(rec, n - 1)
+            rec.messages = [rec.messages[0], rec.messages[1],
+                            {"role": "user", "content": campaign.compacted(rec, titles=self._titles(), session_n=n)}]
+            self.notify(f"session {n}: transcript compacted (earlier sessions archived in sessions/)")
+        for k, v in (("calls", {}), ("fail_streak", 0), ("steps_since_progress", 0), ("finish_challenged", False),
+                     ("wrapup_sent", False), ("verified", False), ("sufficiency_refusals", 0)):
+            st[k] = v
+        st.pop("finish_only_next", None)
+        if n == 1:
+            self._nudge(f"[Scout] This task is a research campaign: it runs in sessions of {self.session_minutes:.0f} "
+                        "minutes, each continuing from the progress notes of the one before. Use the session fully; "
+                        "call finish only when the whole objective is covered and new searches stop finding new "
+                        "material. At the end of the session you will write the notes.")
+        self.step_base = len(rec.steps)
+        campaign.start_session(st, files=rec.files, steps=len(rec.steps), minutes=self.session_minutes)
+        self.notify(f"session {n} of the campaign ({self.session_minutes:.0f} min, {self.max_steps} steps)")
+        return False
+
+    def _close_session(self, ended_by: str, notes: str | None = None) -> dict | None:
+        if not self.session_minutes or campaign.open_session(self.rec.state) is None:
+            return None
+        s = campaign.end_session(self.rec.state, files=self.rec.files, steps=len(self.rec.steps),
+                                 ended_by=ended_by, notes=notes)
+        campaign.write_notes(self.rec, s, notes or "")
+        return s
+
+    def _end_session(self, why: str) -> None:
+        """The session's time box is used: progress notes, then paused (or the campaign's full report if it ended)."""
+        rec = self.rec
+        self._nudge(f"The session is over: {why}. No more research tools in this session. Call session_notes now: "
+                    "the next session will start from your notes alone, plus the lists of pages read, items saved "
+                    "and searches run.")
+        notes = ""
+        try:
+            r = self._model_turn(tools=[SESSION_NOTES_TOOL])
+            for c in r.tool_calls:
+                if c.function.name == "session_notes":
+                    notes = str(json.loads(c.function.arguments or "{}").get("notes", ""))
+                    rec.messages.append(_assistant_dict(r.message))
+                    rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": "noted"})
+                    break
+            notes = (notes or r.text or "").strip()
+        except Exception as e:  # noqa: BLE001 - notes from the record instead
+            self.notify(f"session notes: model failed ({type(e).__name__}); notes taken from the record")
+        notes = notes or campaign.fallback_notes(rec.state, self._titles())
+        s = self._close_session(why, notes)
+        c = campaign.campaign(rec.state)
+        ended = campaign.ended_reason(rec.state)
+        if ended:
+            c["ended"] = ended
+            self.notify(f"campaign over: {ended}")
+            self._final_report(f"Campaign ended: {ended}.")
+            return
+        rec.status = "paused"
+        minutes = int(self.session_minutes)
+        rec.report = (campaign.digest(s, notes) + f"\n\n_Paused. The next session continues from these notes: "
+                      f"`python -m scout resume {rec.id} --session {minutes}m`._")
+        self.notify(f"session {s['n']} ended ({why}); paused")
+
     # -- loop ------------------------------------------------------------------------------------------
     def _repair_transcript(self) -> None:
         """R5: after a crash, the last turn's tool calls may lack results. Give each one the logged result if
@@ -890,6 +1005,8 @@ class Scout:
                         + ". Start with run_playbook, giving the params from the objective. If it stops, continue "
                           "by hand from where it stopped.")})
         self._repair_transcript()
+        if self.session_minutes and self._begin_session():
+            return rec
         if rec.status == "needs_human" and rec.state.get("handed_over"):
             # B4: the person did what was handed over (a sign-in, a CAPTCHA, a two-factor prompt); carry on.
             h = rec.state.pop("handed_over")
@@ -904,11 +1021,17 @@ class Scout:
         try:
             with self.client_factory(bool(rec.tor)) as client:
                 while True:
-                    if len(rec.steps) >= self.max_steps:
-                        self._final_report(f"Stopped after {self.max_steps} steps.")
+                    if self._used() >= self.max_steps:
+                        if self.session_minutes:
+                            self._end_session(f"the session's {self.max_steps} steps are used")
+                        else:
+                            self._final_report(f"Stopped after {self.max_steps} steps.")
                         break
                     if self.deadline.expired:
-                        self._final_report(f"Stopped: the {self.deadline.seconds / 60:.0f}-minute time budget is used up.")
+                        if self.session_minutes:
+                            self._end_session(f"the session's {self.deadline.seconds / 60:.0f} minutes are used")
+                        else:
+                            self._final_report(f"Stopped: the {self.deadline.seconds / 60:.0f}-minute time budget is used up.")
                         break
                     if rec.state.pop("finish_only_next", False):
                         # after verification feedback: rewrite the report, no new research (enforced, not asked)
@@ -929,6 +1052,7 @@ class Scout:
                         return rec
                     rec.save()
         except ModelUnavailable as e:
+            self._close_session("model unavailable")
             rec.status = "waiting"
             rec.report = (f"Paused: the model did not answer for {MODEL_OUTAGE_MINUTES} minutes ({e}). "
                           f"Run `python -m scout resume {rec.id}` when it is back.")
@@ -966,7 +1090,7 @@ class Scout:
                 continue
             if name == "finish":
                 recent_failures = [s for s in rec.steps[-8:] if not s.ok]
-                if recent_failures and not st["finish_challenged"] and len(rec.steps) < self.max_steps - 2 \
+                if recent_failures and not st["finish_challenged"] and self._used() < self.max_steps - 2 \
                         and not self.deadline.expired:
                     st["finish_challenged"] = True        # R7: challenge a premature finish once
                     rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": (
@@ -978,7 +1102,7 @@ class Scout:
                     continue
                 report = str(args.get("report", "")).strip()
                 if (self.rigor == "thorough" and self.verify and st.get("sufficiency_refusals", 0) < sufficiency.MAX_REFUSALS
-                        and len(rec.steps) < self.max_steps - 4):
+                        and self._used() < self.max_steps - 4):
                     misses = self._insufficient(report)      # RG3: the model proposes, code checks
                     if misses:
                         st["sufficiency_refusals"] = st.get("sufficiency_refusals", 0) + 1
@@ -1000,7 +1124,7 @@ class Scout:
                                           "partial": len(v.partial), "error": v.error,
                                           "unsupported": [c.get("claim", "")[:200] for c in v.unsupported]}
                     rec.save()
-                    if v.unsupported and len(rec.steps) < self.max_steps - 1:
+                    if v.unsupported and self._used() < self.max_steps - 1:
                         listing = "\n".join(f"- {c.get('claim', '')}" for c in v.unsupported[:8])
                         rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": (
                             "Verification: these claims in your report are not supported by the sources you saved:\n"
@@ -1019,6 +1143,7 @@ class Scout:
                 report += self._rules_line()
                 rec.report = report + self._record_line()
                 rec.status = "done"
+                self._close_session("finish")
                 rec.log("finish", {}, True, rec.report[:200])
                 rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": "ok"})
                 rec.save()
@@ -1028,6 +1153,7 @@ class Scout:
                 live = self._browser.live_view if self._browser is not None else None
                 st["handed_over"] = {"reason": reason, "url": st.get("browser_url"), "live_view": live}
                 rec.status = "needs_human"
+                self._close_session("needs_human")
                 rec.report = reason + (f"\n\nTake over in the live view: {live}" if live else
                                        "\n\nTake over in the browser window on this machine." if self._browser is not None
                                        else "") + (

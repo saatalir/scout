@@ -1,6 +1,6 @@
 # Rigor for open-ended research (plan)
 
-Status (2026-11-24): **`standard` and `thorough` work** (RG1–RG6 built); RG7–RG10 and gate G4 to do. Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
+Status (2026-11-24): **all packages built** (RG1–RG10); gate G4 running (results in §4 when it ends). Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
 
 ## 1. The problem
 
@@ -42,6 +42,17 @@ results new to the task; sub-agents' searches count), and every finding backed b
 independent sources. A finish that misses one is sent back with what is missing (at most twice, and not in the
 last 4 steps); the report ends with which rules were met. The budget becomes 80 steps and 90 minutes unless given.
 Sub-agents inherit the level's evidence and checks, not the finish rules (the main task applies them).
+
+**Campaigns (RG8–RG10):** `python -m scout run --rigor thorough --session 2h "…"` runs the first session; it
+ends paused with progress notes (`sessions/<n>.md` in the task folder; the report is the session's digest).
+`python -m scout resume <id>` runs the next one from a compacted transcript (the session length is kept in the
+record). `--until 2026-12-31` and `--max-sessions 5` bound a campaign; it also ends when the model finishes or
+when two sessions in a row read no new page and save no new item. For a session every day:
+`python -m scout schedule <id> --daily 09:00 --session 2h` (macOS: a launchd agent in
+`~/Library/LaunchAgents/local.online-scout.<id>.plist`; Linux: a crontab line), `schedule --list`,
+`schedule --remove <id>`. Scheduled sessions run `resume --unattended` and are skipped, with the reason in the
+record, when the task is finished or waits for a person, another session of it is running, or the model or the
+browser host does not answer. The Mac must be awake at that time (launchd runs a missed job at the next wake).
 
 **Live check (2026-11-24):** an open-ended question at `standard` ("hydrogen in salt caverns: where, and the
 risks?") read pages from 8 sites and wrote a confident-looking report, then ran out of its 20-step budget. The

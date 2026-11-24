@@ -406,7 +406,8 @@ def test_tor_http_uses_local_socks_for_local_host(monkeypatch):
 def test_task_eval_checks_score_a_record():
     from evals.phase_tasks import evaluate, load_tasks
     tasks = {t["id"]: t for t in load_tasks()}
-    assert 15 <= len(tasks) <= 20 and sum(t["phase"] == 1 for t in tasks.values()) >= 10
+    fixed = [t for t in tasks.values() if t["phase"] <= 3]          # the G1-G3 set (phase 4 is the rigor gate G4)
+    assert 15 <= len(fixed) <= 20 and sum(t["phase"] == 1 for t in fixed) >= 10
 
     rec = TaskRecord.create("x", tor=False)
     f = rec.downloads / "attn.pdf"

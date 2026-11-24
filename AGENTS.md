@@ -50,9 +50,11 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/evidence.py` | RG1: pages read kept as evidence in the task folder (`evidence/<n>.md`, indexed in the record) at rigor standard/thorough; rigor levels | `add()`, `text_of()`, `merge()`, `normalize_rigor()` |
 | `scout/sufficiency.py` | RG3/RG4: thoroughness rules checked in code before a `thorough` task may finish (sites, counter-search, saturation, corroboration); search log | `log_search()`, `process_misses()`, `corroboration_misses()`, `summary()` |
 | `scout/independence.py` | RG6: same site (registrable domain; the DOI or arXiv id behind a resolver link) or near-copy texts = one source; undercounting is safe | `registrable_domain()`, `source_key()`, `near_duplicate()`, `independent_groups()`, `count_independent()` |
+| `scout/campaign.py` | RG8/RG9: campaigns: sessions with a time box, progress notes, end conditions (finish, two empty sessions, `until`, `max_sessions`), compaction into a fresh transcript, the per-task session lock, the unattended preflight | `start_session()`, `end_session()`, `ended_reason()`, `compacted()`, `preflight()` |
+| `scout/schedule.py` | RG10: daily schedules for a campaign (per-user launchd agent on macOS, a crontab line on Linux); installed only by `scout schedule` | `Scheduler.install/remove/list`, `parse_time()` |
 | `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
 | `scout/cli.py` | `python -m scout run/resume/show/list/promote`; asks the Tor question and approvals on the terminal | `main()` |
-| `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (20 tasks, phase-tagged; r11–r13 test resilience) and its runner/checks | `python -m evals.phase_tasks` |
+| `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (20 tasks for G1–G3, phase-tagged; r11–r13 test resilience; phase 4: o01–o06 open-ended at `thorough` and the campaign c01, gate G4) and its runner/checks | `python -m evals.phase_tasks`; G4: `--phase 4 --phase-only` |
 | `deploy/browser-vm/scout-browser` | Helper on the VM (stdlib-only Python); one JSON object per call | `start`, `stop`, `status`, `desktop-start/shot/act/files/fetch/stop/list` |
 | `deploy/browser-vm/setup.sh` | Idempotent VM setup (root) | — |
 | `config/browsers.yaml` | Hosts, profiles (`research`, `research-tor`, `local-test`), search and Tor settings | — |
@@ -80,6 +82,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 15. **External calls are retried centrally.** HTTP: automatically, by `RetryTransport` in `scout.net`. Model: `Scout._model_turn`. Do not add ad-hoc retry loops in tools; add fallbacks (other sources or locations) instead, and report what was tried.
 16. **Vision and the desktop keep every gate.** Vision clicks that submit go through the approval gate; passwords are never typed and CAPTCHAs never solved on any screen; the desktop container keeps its isolation flags (no capabilities, read-only, no host loopback, view on 127.0.0.1) and is removed when the task ends.
 17. **Never give a coding agent tools on this machine.** Delegate through `scripts/delegate.py`: the model returns files, tests run under `sandbox-exec`, and nothing merges unreviewed. An opencode `--auto` run escaped its policy once (ROADMAP §2).
+18. **Scout never schedules itself.** Schedules exist only through the user's own `python -m scout schedule` command. A scheduled session (`resume --unattended`) keeps every gate: the Tor choice from the record, approvals per `SCOUT_APPROVALS` (`ask` without a terminal denies), and a task waiting for a person is skipped, never resumed as if the hand-off were done.
 
 ## 4. Commands
 

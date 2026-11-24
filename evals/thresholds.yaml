@@ -22,3 +22,4 @@ roles:
 phase1_tasks: {pass_rate: 0.75}
 phase2_tasks: {pass_rate: 0.75}     # G2: phase-1 and phase-2 tasks together; same bar as G1
 phase3_tasks: {pass_rate: 0.75}     # G3: all tasks (phases 1-3); same bar as G1 and G2
+phase4_tasks: {pass_rate: 0.75}     # G4: the open-ended tasks o01-o06 and the campaign c01 (--phase 4 --phase-only)
