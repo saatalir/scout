@@ -19,6 +19,7 @@ import os
 import sys
 
 from .browser import load_browser_config
+from .config import ROOT
 from .library import library_dir
 from .task import TaskRecord
 
@@ -61,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="scout", description="Online Scout: a local-first web research agent.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     where_help = "where the browsers run (default: SCOUT_WHERE, else vm)"
+    rigor_help = ("how thoroughly to research: quick (concrete lookups), standard (sources kept, confidence shown), "
+                  "thorough (corroboration and sufficiency checked before finishing); default: SCOUT_RIGOR, else quick")
     run = sub.add_parser("run", help="run a new task")
     run.add_argument("objective")
     g = run.add_mutually_exclusive_group()
@@ -70,10 +73,13 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--approvals", choices=["ask", "auto", "deny"],
                      help="who approves irreversible actions (default: SCOUT_APPROVALS, else ask)")
     run.add_argument("--where", choices=["vm", "local"], default=None, help=where_help)
+    run.add_argument("--rigor", choices=["quick", "standard", "thorough"], default=None, help=rigor_help)
     res = sub.add_parser("resume", help="continue a paused or unfinished task")
     res.add_argument("task_id")
     res.add_argument("--max-steps", type=int, default=40)
     res.add_argument("--where", choices=["vm", "local"], default=None, help=where_help)
+    res.add_argument("--rigor", choices=["quick", "standard", "thorough"], default=None,
+                     help="change the task's rigor level (default: keep the one it started with)")
     show = sub.add_parser("show", help="print a task record")
     show.add_argument("task_id")
     sub.add_parser("list", help="list tasks")
@@ -107,11 +113,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from .agent import Scout     # imported late: the model client is not needed for list/show
+    from .evidence import normalize_rigor
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env", override=False)
+    # A new task takes --rigor, else SCOUT_RIGOR, else quick; a resumed one keeps its level unless --rigor is given.
+    level = a.rigor or (os.environ.get("SCOUT_RIGOR") if a.cmd == "run" else None)
+    try:
+        rigor = normalize_rigor(level) if (level or a.cmd == "run") else None
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     if a.cmd == "run":
         rec = TaskRecord.create(a.objective, tor=decide_tor(a.tor))
     else:
         rec = TaskRecord.load(a.task_id)
-    print(f"Task {rec.id} (Tor {'on' if rec.tor else 'off'})")
+    if rigor:
+        rec.state["rigor"] = rigor
+        rec.save()
+    print(f"Task {rec.id} (Tor {'on' if rec.tor else 'off'}, rigor {rec.state.get('rigor', 'quick')})")
     from .approvals import ApprovalPolicy
     policy = ApprovalPolicy.from_env(getattr(a, "approvals", None))
     if policy.mode != "ask":

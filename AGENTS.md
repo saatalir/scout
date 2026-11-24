@@ -46,7 +46,9 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/desktop.py`, `deploy/desktop/` | D1: disposable desktop on the VM (rootless podman, image `scout-desktop`), driven via `scout-browser desktop-*` over SSH; no Tor route (refused when Tor is on); downloads copied out and verified on close | `Desktop`, `DesktopScreen`, `DESKTOP_TOOLS` |
 | `scout/promote.py` | D4: traces of a flow that succeeded ≥ 2 times → proposed playbook in `playbooks/proposed/` (inactive, git-ignored) for review; typed values always become params | `promote()`, `propose()`, `flow_key()` |
 | `scout/resilience.py` | R1/R3 primitives: transient vs permanent errors, `RetryPolicy`, `Retry-After`, per-host `CircuitBreaker`, `RetryTransport` (under all tool HTTP), `Deadline`, `run_with_time_limit`, `SCOUT_CHAOS_DOWN` fault injection | `is_transient()`, `RetryPolicy.call()`, `RetryTransport` |
-| `scout/verify.py` | Claims in the report checked against saved sources (extractor role) | `verify_report(llm, report, files)` |
+| `scout/verify.py` | Claims in the report checked against saved sources (extractor role); at rigor standard/thorough, every supporting source per claim, independence and confidence computed in code (RG2, RG5) | `verify_report()`, `corroborate_report()`, `confidence()`, `findings_table()` |
+| `scout/evidence.py` | RG1: pages read kept as evidence in the task folder (`evidence/<n>.md`, indexed in the record) at rigor standard/thorough; rigor levels | `add()`, `text_of()`, `merge()`, `normalize_rigor()` |
+| `scout/independence.py` | RG6: same site (registrable domain) or near-copy texts = one source; undercounting is safe | `registrable_domain()`, `near_duplicate()`, `independent_groups()`, `count_independent()` |
 | `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
 | `scout/cli.py` | `python -m scout run/resume/show/list/promote`; asks the Tor question and approvals on the terminal | `main()` |
 | `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (20 tasks, phase-tagged; r11–r13 test resilience) and its runner/checks | `python -m evals.phase_tasks` |
@@ -130,6 +132,7 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | `SCOUT_ROUTER` | `direct` / `litellm` | Whether Scout talks to Strata directly or through LiteLLM |
 | `STRATA_MODEL` | model id / `auto` | Pinned model. `auto` takes the first listed model; avoid it. |
 | `SCOUT_TOR` | `ask` / `on` / `off` | Default Tor mode for searches (§3 rule 3) |
+| `SCOUT_RIGOR` | `quick` / `standard` / `thorough` | How thoroughly to research (docs/RIGOR.md); stored per task; `scout run/resume --rigor` overrides. `quick` = the behaviour the gates G1–G3 measured |
 | `SCOUT_WHERE` | `vm` / `local` | Where the browsers run: the VM over SSH (default) or this machine (`search.where` picks the profile pair; no desktop locally; SETUP §4.4). `scout run/resume --where` overrides |
 | `SCOUT_VM_HOST`, `SCOUT_TAILNET`, `SCOUT_VM_USER`, `SCOUT_SSH_KEY` | strings | Where the browser VM is and how Scout logs in |
 | `SCOUT_TIMEZONE` | IANA name | Time zone for non-Tor profiles |

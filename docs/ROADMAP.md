@@ -39,7 +39,7 @@ Building with two models saves tokens without lowering quality:
 
 > **Why not an autonomous coding agent?** The first version ran opencode (an agentic coder, already set up for Strata) with `--auto` under a deny-by-default permission policy. A policy probe passed, but in the real smoke-test task the agent used absolute paths into the main checkout, wrote files there, and ran shell commands the policy should have denied, including `git stash` in the main checkout. No work was lost; the stash was restored within the run. Since the policy can't be relied on, the model gets no tools at all. Delegated code runs only in the sandbox, and only through the tests.
 
-### What the delegations showed (2026-11-18, seven packages)
+### What the delegations showed (2026-11-18 to 11-24, eight packages)
 
 | Package | Work | Rounds | Review |
 | --- | --- | --- | --- |
@@ -47,6 +47,7 @@ Building with two models saves tokens without lowering quality:
 | B7 | Test fixture pages | 1 | Merged as written |
 | B6 | Consent library (a safety rule) | 2 | Tests passed, but its label rule could click "Accept non-essential"; rule rewritten |
 | D4 | Playbook promotion | 1 | 361 lines; review changed about 24, all privacy (typed values and task text kept; partly the spec's fault) |
+| RG6 | Domain and near-copy helpers, intent stated ("undercounting is safe") | 2 | Correct; a quadratic recomputation and a few over-counting suffixes fixed in review |
 | Local mode | Config switch, profiles, CLI | 4 | Code right from round 2, about what Claude would write. Rounds 3–4 (most of 55 min) chased a test that already failed in the sandbox; the harness also mangled `.env.example`. Both were harness faults, now fixed |
 
 Strata reliably meets the letter of the spec and the tests. It misses intent the spec leaves unstated
@@ -127,13 +128,16 @@ Detail and design: [RIGOR.md](RIGOR.md). A per-task setting `--rigor quick|stand
 
 | ID | Package | Owner | Depends on | Acceptance | State |
 | --- | --- | --- | --- | --- | --- |
-| RG1 | Evidence store: pages read are saved in the task folder and count as sources (not library items) | C | — | Tests: fetched and browser-read pages appear as evidence; resume keeps them | |
-| RG2 | Corroboration in verification: every supporting source per claim, over library items and evidence, batched | C | RG1, RG6 | Tests: a claim backed by two independent sources is counted twice, by two copies once | |
+| RG1 | Evidence store: pages read are saved in the task folder and count as sources (not library items) | C | — | Tests: fetched and browser-read pages appear as evidence; resume keeps them | **Built** (`scout/evidence.py`; at `standard`/`thorough`; sub-agents' evidence merged into the parent) |
+| RG2 | Corroboration in verification: every supporting source per claim, over library items and evidence, batched | C | RG1, RG6 | Tests: a claim backed by two independent sources is counted twice, by two copies once | **Built** (`corroborate_report` in `scout/verify.py`: claims listed once, judged per batch of 12 sources; supports / partial / contradicts) |
 | RG3 | Sufficiency rules checked in code before finish at `thorough` (corroboration, breadth, saturation, counter-search, no unsupported claims); at most two refusals | C | RG2, RG4 | Tests: each rule refuses a finish that misses it; the budget still ends the task honestly | |
 | RG4 | Counter-evidence searches (`purpose: "counter"`), conflicts reported with both sides | C | — | Tests: the rule counts counter-searches; a conflict reaches the report | |
-| RG5 | Report findings table with confidence computed from the record (high / medium / low) | C | RG2 | Tests: labels follow the source counts, not the model's wording | |
-| RG6 | Independence helpers: registrable domain (eTLD+1), near-duplicate texts, independent groups | **S** | — | Fixture tests; undercounting is safe, overcounting fails | |
+| RG5 | Report findings table with confidence computed from the record (high / medium / low) | C | RG2 | Tests: labels follow the source counts, not the model's wording | **Built** (`confidence()`, `findings_table()`; appended to the report) |
+| RG6 | Independence helpers: registrable domain (eTLD+1), near-duplicate texts, independent groups | **S** | — | Fixture tests; undercounting is safe, overcounting fails | **Done** (Strata, 2 rounds; `scout/independence.py`). Review: fingerprints computed once per text (was per pair), CDN and tunnel suffixes removed (they could over-count) |
 | RG7 | Open-ended eval tasks o01–o06 (answer keys, a single-source trap, a controversy, a thin-evidence question) and their check kinds | S (checks) + C (tasks) | RG3, RG5 | `pytest`; the runner accepts `--rigor` | |
+| RG8 | Sessions: `--session 2h` time box; progress notes; status `paused`; a campaign ends by sufficiency, saturation over sessions, `--until`, `--max-sessions` or the user | C | RG1, RG3 | Tests: a session pauses with notes and the next resumes from them | |
+| RG9 | Compaction between sessions: a fresh transcript from the notes, the evidence index and the library; later sessions look for what is new | C | RG8 | Tests: the transcript stays bounded over sessions; no evidence lost | |
+| RG10 | Schedules: `scout schedule <id> --daily 09:00 --session 2h` (launchd on macOS, cron on Linux), list and remove; only by the user's command; every gate kept unattended | C | RG8 | Tests with a fake launchctl; one live scheduled session | |
 | G4 | Rigor gate: o01–o06 at `thorough` ≥ 75 % over 3 repeats; the 20 tasks at `quick` without regression; time and steps per level recorded | C | RG1–RG7 | Pass rate ≥ threshold | |
 
 ### Cross-cutting (any time)
@@ -153,6 +157,6 @@ Detail and design: [RIGOR.md](RIGOR.md). A per-task setting `--rigor quick|stand
 2. SA and VF; G1 baseline. Then LIB with you.
 3. Phase 2: B1 → B2 → B3/B4 (B6, B7 delegated) → B5 → G2.
 4. Phase 3: D1 (rootless podman on the VM) → D2 → D3 → D4 → G3.
-5. Rigor: RG6 (Strata, in the background) ∥ RG1 → RG2 → RG5 → RG4 → RG3 → RG7 → G4.
+5. Rigor: RG6 (Strata, in the background) ∥ RG1 → RG2 → RG5 → RG4 → RG3 → RG8 → RG9 → RG10 → RG7 → G4.
 
 Each step ends with tests passing, docs updated, and a local commit. Pushes happen when you say so.

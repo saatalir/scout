@@ -1,6 +1,6 @@
 # Rigor for open-ended research (plan)
 
-Status: **planned** (2026-11-24). Packages RG1–RG7 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
+Status (2026-11-24): **`standard` works** (RG1, RG2, RG5, RG6 built); RG3, RG4, RG7–RG10 and gate G4 to do. Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
 
 ## 1. The problem
 
@@ -32,6 +32,12 @@ The principle: **the model proposes, code checks.** Sufficiency is measured from
 domains, verification results), never self-reported. A finish that misses a rule is refused with what is
 missing, like the finish challenge; after the budget runs out, Scout finishes anyway with an honest report
 that names the unmet rules (R7: honest completion beats a stuck task).
+
+**Using it now:** `python -m scout run --rigor standard "…"` (or `SCOUT_RIGOR=standard` in `.env`). The report
+then ends with a findings table: each finding, its confidence (high / medium / low, computed from the number of
+independent supporting sources and any contradiction), the sources by site, and which findings rest on one source
+or are contradicted. The pages read are in the task folder under `evidence/`. `thorough` currently behaves like
+`standard`; its finish rules come with RG3–RG4.
 
 ## 3. Packages
 
@@ -104,11 +110,41 @@ New check kinds (mechanical, delegated): `min_independent_sources`, `findings_ha
 `counter_search_done`, `report_mentions_conflict`. No model-graded rubric: the grader would be the same model
 as the agent.
 
+### Long-running research: sessions, compaction, schedules (RG8–RG10)
+
+Some questions deserve hours, not minutes: "follow what is published on X", "build a full picture of Y". A
+**campaign** is one task that runs in **sessions**: each session has its own time box, ends paused with notes,
+and the next session continues from them, the same day or the next.
+
+**RG8 — Sessions with a time box (C).** `python -m scout run --session 2h …` (and `resume --session …`): the
+session's own deadline; at its end Scout writes **progress notes** (what is covered, what each checklist part
+still needs, the open leads, the searches done) and sets the status `paused`, not `done`. `resume` starts the
+next session. A campaign ends when the sufficiency rules (RG3) are met, when new sessions stop finding anything
+(saturation over two sessions), at `--until <date>` or `--max-sessions N`, or when the user stops it. Each
+session's report is a digest of what it added; the last one is the full report.
+
+**RG9 — Compaction between sessions (C).** A transcript that grows for days would overflow the model's context.
+A new session starts from a fresh transcript: the objective, the progress notes, the evidence index (RG1: titles,
+URLs, what each supports) and the library items. Nothing is lost: the evidence and the old transcripts stay in
+the task folder. Later sessions look for what is new: date filters on searches, and evidence and library
+deduplication by URL and hash.
+
+**RG10 — Schedules (C).** `python -m scout schedule <task id> --daily 09:00 --session 2h [--until …]` installs a
+per-user launchd agent on macOS (a cron line on Linux) that runs `python -m scout resume <id> --session 2h`;
+`schedule --list` and `schedule --remove <id>` manage them. Installing a schedule is always the user's own
+command: Scout never schedules itself. An unattended session keeps every gate: the Tor choice is fixed in the
+task record when the campaign starts; approvals follow `SCOUT_APPROVALS` (`ask` with no terminal denies, as
+today); a needed hand-off pauses the campaign as `needs_human` and later sessions wait for it. Each session
+first checks that Strata and the browser host answer; if not, it skips and tries next time (R6). The Mac must be
+awake (launchd runs a missed job at the next wake).
+
 ## 4. Gate G4
 
 - o01–o06 at `thorough`: pass rate ≥ 75 % over 3 repeats.
 - The 20 existing tasks at `quick`: no regression (≥ the G3 rate minus noise).
 - Recorded: time and steps per level, so the cost of rigor is known.
+- A campaign test: one open-ended task over three short sessions (`--session 10m`): it pauses with notes,
+  resumes from a compacted transcript, adds new evidence each time and ends by saturation or `--max-sessions`.
 
 Then decide the default level from the numbers (likely `standard`).
 
@@ -125,4 +161,5 @@ Then decide the default level from the numbers (likely `standard`).
 
 ## 6. Order of work
 
-RG6 (Strata, in the background) ∥ RG1 → RG2 → RG5 (then `standard` works) → RG4 → RG3 (`thorough`) → RG7 → G4.
+RG6 (Strata, in the background) ∥ RG1 → RG2 → RG5 (then `standard` works) → RG4 → RG3 (`thorough`) → RG8 →
+RG9 → RG10 → RG7 → G4.

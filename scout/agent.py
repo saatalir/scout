@@ -25,6 +25,7 @@ from .library import Item, find_existing, read_front_matter, save_item
 from .llm import LLM
 from .net import http_client
 from .resilience import DeadlineExceeded, Deadline, RetryPolicy, is_transient, run_with_time_limit
+from . import evidence
 from .task import TaskRecord
 from .tools import academic, web
 
@@ -261,6 +262,7 @@ class Scout:
         self._vision: VisionTools | None = None
         self._desktop: Desktop | None = None
         self.approvals = approvals or ApprovalPolicy.from_env()       # ask (default) | auto | deny
+        self.rigor = evidence.normalize_rigor(self.rec.state.get("rigor"))   # quick (default) | standard | thorough
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
         st.setdefault("fail_streak", 0)
@@ -444,9 +446,19 @@ class Scout:
             out = self._register(self.browser.call(name, a, approve=self._gate))
         else:
             out = self.browser.call(name, a, approve=self._gate)
+        view = self._browser.view if self._browser is not None else None
+        if name in ("browser_open", "browser_read") and view is not None and not (isinstance(out, dict) and out.get("error")):
+            self._keep_evidence(view.url, view.title, view.text, name)
         if self._browser is not None and self._browser.page is not None and not self._browser.page.is_closed():
             self.rec.state["browser_url"] = self._browser.page.url      # where to pick up after a hand-off
         return out
+
+    def _keep_evidence(self, url: str, title: str, text: str, via: str) -> None:
+        """RG1: at rigor standard/thorough, a page read is kept as evidence in the task folder."""
+        if self.rigor == "quick":
+            return
+        with self._files_lock:
+            evidence.add(self.rec.state, self.rec.dir / "evidence", url=url, title=title, text=text, via=via)
 
     @property
     def vision(self) -> VisionTools:
@@ -587,7 +599,9 @@ class Scout:
         if name == "web_search":
             return self._web_search(a)
         if name == "fetch_page":
-            return web.fetch_page(client, a["url"]).for_model()
+            page = web.fetch_page(client, a["url"])
+            self._keep_evidence(page.url, page.title, page.markdown, "fetch_page")
+            return page.for_model()
         if name == "download_file":
             return self._download(client, a)
         if name == "save_to_library":
@@ -616,6 +630,7 @@ class Scout:
         for attempt in (1, 2):                    # R1 at the agent level: one retry for a sub-agent that got nowhere
             child = TaskRecord.create(objective + attempt_note, tor=self.rec.tor)
             child.state["parent"] = self.rec.id
+            child.state["rigor"] = self.rigor
             sub = Scout(child, llm=self.llm, notify=lambda m: self.notify(f"  [sub {n}] {m}"),
                         max_steps=SUB_STEPS, client_factory=self.client_factory, web_search_fn=self.web_search_fn,
                         task_minutes=SUB_MINUTES, tool_seconds=self.tool_seconds, model_policy=self.model_policy,
@@ -630,6 +645,7 @@ class Scout:
             attempt_note = f"\n\nA first attempt failed: {child.report[:300]}. Use a different approach."
         with self._files_lock:
             self.rec.files.extend(f for f in child.files if f not in self.rec.files)
+            evidence.merge(self.rec.state, child.state.get("evidence", []))
         return {"part": n, "question": question, "status": child.status, "saved": len(child.files),
                 "summary": child.report[:1500], "steps": len(child.steps), "task_id": child.id}
 
@@ -715,6 +731,30 @@ class Scout:
             rec.report = f"{why} (No report: {type(e).__name__}.)"
         rec.report += self._record_line()
         rec.status = "partial" if rec.files else "failed"
+
+    def _check_report(self, report: str) -> Any:
+        """VF at rigor quick (claims against the saved library items); RG2 at standard/thorough (every supporting
+        source per claim, over library items and evidence pages, independence and confidence computed in code)."""
+        from .verify import Corroboration, Verification, corroborate_report, verify_report
+        try:
+            if self.rigor == "quick":
+                return run_with_time_limit(verify_report, 300, self.llm, report, self.rec.files)
+            c = run_with_time_limit(corroborate_report, 900, self.llm, report, self.rec.files,
+                                    list(self.rec.state.get("evidence", [])))
+        except Exception as e:  # noqa: BLE001 - verification never blocks finishing
+            return (Verification if self.rigor == "quick" else Corroboration)(error=type(e).__name__)
+        self.rec.state["corroboration"] = {"claims": c.claims, "sources": c.sources, "unchecked": c.unchecked,
+                                           "error": c.error}
+        return c
+
+    def _findings_section(self) -> str:
+        """RG5: the findings table from the stored corroboration (unsupported claims left out), then a blank line."""
+        data = self.rec.state.get("corroboration")
+        if self.rigor == "quick" or not data or data.get("error"):
+            return ""
+        from .verify import Corroboration, findings_table
+        table = findings_table(Corroboration(claims=data["claims"], sources=data["sources"]))
+        return f"{table}\n\n" if table else ""
 
     def _record_line(self) -> str:
         """R7: what the task record shows was saved, appended to every report so a wrong claim is visible.
@@ -857,15 +897,11 @@ class Scout:
                     self.notify("finish challenged: failures remain")
                     continue
                 report = str(args.get("report", "")).strip()
-                if self.verify and rec.files and not st["verified"]:
+                has_sources = bool(rec.files) or (self.rigor != "quick" and bool(st.get("evidence")))
+                if self.verify and has_sources and not st["verified"]:
                     st["verified"] = True                    # check claims against stored sources, once
-                    from .verify import verify_report
                     self.notify("verifying the report against stored sources")
-                    try:
-                        v = run_with_time_limit(verify_report, 300, self.llm, report, rec.files)
-                    except Exception as e:  # noqa: BLE001
-                        from .verify import Verification
-                        v = Verification(error=type(e).__name__)
+                    v = self._check_report(report)
                     # A check by Scout, not an action of the agent: recorded in the task state, not as a step,
                     # so it does not use the agent's step budget.
                     st["verification"] = {"ok": v.ok, "note": v.note(), "checked": v.checked,
@@ -880,9 +916,14 @@ class Scout:
                               "say only what the saved sources say. Do not start new searches for them. Then call "
                               "finish again with the corrected report.")})
                         st["finish_only_next"] = True
+                        if self.rigor != "quick":            # the findings table still goes with the corrected report
+                            st["verification_note"] = (f"{v.note()} _{len(v.unsupported)} unsupported claim(s) were sent "
+                                                       "back; the corrected wording was not checked again._")
                         self.notify(f"verification: {len(v.unsupported)} unsupported claims sent back")
                         continue
-                    report = f"{report}\n\n{v.note()}"
+                    st["verification_note"] = v.note()
+                if st.get("verification_note"):
+                    report = f"{report}\n\n{self._findings_section()}{st['verification_note']}"
                 rec.report = report + self._record_line()
                 rec.status = "done"
                 rec.log("finish", {}, True, rec.report[:200])
