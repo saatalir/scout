@@ -294,6 +294,7 @@ To make Strata start automatically, run that same command from a systemd **user*
 | --- | --- |
 | Try a setting for one start | `strata launch --preset "<preset>" --set KEY=VALUE --no-tui` |
 | Switch preset or model | `strata launch --preset "<other>" --restart --no-tui`, then check `/v1/models` and update `STRATA_MODEL` if the id changed, then rerun `check_connection.py` and the eval gate |
+| Upgrade Strata | Note `strata --version` in `STRATA_VERSION` (`.env`) before and after. `check_connection.py` compares the server with `evals/strata_pin.json` (the Strata the last gate passed on: model, context, slots, sampling defaults, chat template); a mismatch means rerun `python -m evals.run --repeats 3` and the task gates, which write a new pin when they pass. Commit the new pin |
 | Rotate the key | `strata launch --preset "<preset>" --new-key --restart --no-tui`, then `--show-key`, then update `.env` on every client |
 | Update Strata | `strata update` (switches only after a test start), then the §7 checks and the eval gate |
 

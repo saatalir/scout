@@ -52,6 +52,8 @@ This file is for coding agents. It gives you the facts you need to change this r
 | `scout/independence.py` | RG6: same site (registrable domain; the DOI or arXiv id behind a resolver link) or near-copy texts = one source; undercounting is safe | `registrable_domain()`, `source_key()`, `near_duplicate()`, `independent_groups()`, `count_independent()` |
 | `scout/campaign.py` | RG8/RG9: campaigns: sessions with a time box, progress notes, end conditions (finish, two empty sessions, `until`, `max_sessions`), compaction into a fresh transcript, the per-task session lock, the unattended preflight | `start_session()`, `end_session()`, `ended_reason()`, `compacted()`, `preflight()` |
 | `scout/schedule.py` | RG10: daily schedules for a campaign (per-user launchd agent on macOS, a crontab line on Linux); installed only by `scout schedule` | `Scheduler.install/remove/list`, `parse_time()` |
+| `scout/trace.py` | X2: `events.jsonl` per task (model turns with time and tokens, tool calls, notes, run ends); `scout show` prints where the time went | `event()`, `read()`, `summary()` |
+| `scout/strata_info.py`, `evals/strata_pin.json` | X4: Strata fingerprint (model, context, slots, sampling, chat template hash, optional `STRATA_VERSION`) recorded with eval results; a passed gate pins it; `check_connection.py` warns when the server no longer matches | `current()`, `fingerprint_id()`, `differences()`, `save_pin()` |
 | `scripts/delegate.py` | Strata writes code from a spec in `docs/delegation/`; tests run sandboxed; Claude reviews and merges | `start/check/merge/drop <name>` |
 | `scout/cli.py` | `python -m scout run/resume/show/list/promote`; asks the Tor question and approvals on the terminal | `main()` |
 | `evals/tasks/tasks.yaml`, `evals/phase_tasks.py` | The fixed task eval set (20 tasks for G1–G3, phase-tagged; r11–r13 test resilience; phase 4: o01–o06 open-ended at `thorough` and the campaign c01, gate G4) and its runner/checks | `python -m evals.phase_tasks`; G4: `--phase 4 --phase-only` |
@@ -135,6 +137,7 @@ python -m evals.run --repeats 3                        # the model gate, ~15 min
 | --- | --- | --- |
 | `SCOUT_ROUTER` | `direct` / `litellm` | Whether Scout talks to Strata directly or through LiteLLM |
 | `STRATA_MODEL` | model id / `auto` | Pinned model. `auto` takes the first listed model; avoid it. |
+| `STRATA_VERSION` | string | Optional: `strata --version` from the server; part of the Strata fingerprint recorded with eval results (X4) |
 | `SCOUT_TOR` | `ask` / `on` / `off` | Default Tor mode for searches (§3 rule 3) |
 | `SCOUT_RIGOR` | `quick` / `standard` / `thorough` | How thoroughly to research (docs/RIGOR.md); stored per task; `scout run/resume --rigor` overrides. `quick` = the behaviour the gates G1–G3 measured |
 | `SCOUT_WHERE` | `vm` / `local` | Where the browsers run: the VM over SSH (default) or this machine (`search.where` picks the profile pair; no desktop locally; SETUP §4.4). `scout run/resume --where` overrides |

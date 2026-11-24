@@ -179,6 +179,13 @@ def main(argv: list[str] | None = None) -> int:
         for s in r.steps:
             print(f"[{s.n:>2}] {s.tool:<16} {'ok ' if s.ok else 'ERR'} {s.seconds:>5.1f}s  {s.summary[:110]}")
         _print_result(r)
+        from . import trace
+        t = trace.summary(trace.read(r.dir))
+        if t["model_turns"] or t["tool_calls"]:
+            tools = ", ".join(f"{k} {v['seconds']:.0f}s/{v['calls']}" for k, v in list(t["per_tool"].items())[:6])
+            print(f"\nTime: model {t['model_seconds']:.0f}s over {t['model_turns']} turns "
+                  f"({t['prompt_tokens']} prompt, {t['completion_tokens']} completion tokens); tools "
+                  f"{t['tool_seconds']:.0f}s over {t['tool_calls']} calls ({tools}). Events: {r.dir / trace.FILE}")
         return 0
 
     from .agent import Scout     # imported late: the model client is not needed for list/show

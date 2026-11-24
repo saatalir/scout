@@ -47,6 +47,7 @@ class Outcome:
     report: str = ""
     record: str | None = None
     repeat: int = 1
+    rigor: str = "quick"
 
 
 # -- checks ------------------------------------------------------------------------
@@ -182,7 +183,7 @@ def run_one(task: dict, llm, rigor: str | None = None) -> Outcome:
     from scout.library import _read_index, items_for_task, library_dir
     from scout.task import TaskRecord
 
-    o = Outcome(task_id=task["id"], phase=task["phase"])
+    o = Outcome(task_id=task["id"], phase=task["phase"], rigor=rigor or task.get("rigor") or "quick")
     approvals: list[tuple[int, str]] = []
     rec = TaskRecord.create(task["objective"], tor=bool(task.get("tor")))
     level = rigor or task.get("rigor")
@@ -310,13 +311,24 @@ def run_set(tasks: list[dict], llm, skip: set[str], out_dir: Path, rep: int, rig
     return outcomes
 
 
+def _strata() -> tuple[dict | None, str]:
+    from scout import strata_info
+    try:
+        fp = strata_info.current()
+        return fp, strata_info.fingerprint_id(fp)
+    except Exception as e:  # noqa: BLE001 - never fail an eval over its bookkeeping
+        return None, f"unknown ({type(e).__name__})"
+
+
 def summarise(outcomes: list[Outcome], a, llm, out_dir: Path) -> int:
     ran = [o for o in outcomes if o.status != "skipped"]
     rate = sum(o.passed for o in ran) / max(1, len(ran))
     th = (yaml.safe_load(THRESHOLDS.read_text()) or {}).get(f"phase{a.phase}_tasks", {}).get("pass_rate", 0.75)
+    fp, fp_id = _strata()
+    passed = bool(ran) and rate >= th
     lines = [f"# Task eval — phase {a.phase} — {time.strftime('%Y-%m-%d %H:%M')}", "",
-             f"Model `{llm.model_for('planner')}`. Pass rate **{rate:.0%}** of {len(ran)} run "
-             f"(threshold {th:.0%}): **{'PASS' if rate >= th and ran else 'FAIL'}**.", "",
+             f"Model `{llm.model_for('planner')}`, Strata fingerprint `{fp_id}`. Pass rate **{rate:.0%}** of "
+             f"{len(ran)} run (threshold {th:.0%}): **{'PASS' if passed else 'FAIL'}**.", "",
              "| Task | Result | Status | Steps | Time | Failed checks |", "| --- | --- | --- | --- | --- | --- |"]
     for o in outcomes:
         res = "skip" if o.status == "skipped" else ("pass" if o.passed else "fail")
@@ -328,7 +340,21 @@ def summarise(outcomes: list[Outcome], a, llm, out_dir: Path) -> int:
         for tid in dict.fromkeys(o.task_id for o in ran):
             mine = [o for o in ran if o.task_id == tid]
             lines.append(f"| {tid} | {sum(o.passed for o in mine)}/{len(mine)} |")
+    levels = sorted({o.rigor for o in ran})
+    if levels:                                   # G4: what rigor costs
+        lines += ["", "Cost per rigor level:", "", "| Rigor | Runs | Mean steps | Mean time | Passed |",
+                  "| --- | --- | --- | --- | --- |"]
+        for lv in levels:
+            mine = [o for o in ran if o.rigor == lv]
+            lines.append(f"| {lv} | {len(mine)} | {sum(o.steps for o in mine) / len(mine):.0f} | "
+                         f"{sum(o.seconds for o in mine) / len(mine) / 60:.1f} min | {sum(o.passed for o in mine)}/{len(mine)} |")
     (out_dir / "summary.md").write_text("\n".join(lines) + "\n")
+    if fp:
+        from scout import strata_info
+        (out_dir / "strata.json").write_text(json.dumps({"id": fp_id, **fp}, indent=1) + "\n")
+        if passed and a.repeats >= 3:            # a passed gate pins the Strata it passed on (X4)
+            strata_info.save_pin(fp, gate=f"phase {a.phase} tasks, {time.strftime('%Y-%m-%d')}")
+            print(f"Strata pinned: {strata_info.PIN} ({fp_id}); commit it with the results.")
     print(f"\nPass rate {rate:.0%} ({sum(o.passed for o in ran)}/{len(ran)}); threshold {th:.0%}. {out_dir / 'summary.md'}")
     return 0 if ran and rate >= th else 1
 

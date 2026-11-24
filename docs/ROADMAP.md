@@ -144,9 +144,9 @@ Detail and design: [RIGOR.md](RIGOR.md). A per-task setting `--rigor quick|stand
 
 | ID | Package | Owner | Notes |
 | --- | --- | --- | --- |
-| X2 | Task trace files (jsonl per task: every model turn and tool call, with timings) for debugging and promotion | C | Feeds D4 |
+| X2 | Task trace files (jsonl per task: every model turn and tool call, with timings) for debugging and promotion | C | Feeds D4. **Done** (`events.jsonl` in the task folder, `scout/trace.py`; `scout show` sums model vs tool time) |
 | X3 | Model router (LiteLLM) and queue/swap scheduler | — | **Deferred**: every role passes on Strata; reopen if a role ever moves |
-| X4 | Strata version pinning plus an eval rerun before any Strata upgrade (design risk "Strata changes often") | C + U | Record the version in eval results |
+| X4 | Strata version pinning plus an eval rerun before any Strata upgrade (design risk "Strata changes often") | C + U | Record the version in eval results. **Done** (fingerprint from `/props` and `/health` plus optional `STRATA_VERSION` in every eval result; a passed gate writes `evals/strata_pin.json`; `check_connection.py` warns on a mismatch). U: note `strata --version` on upgrades |
 | X5 | Clean-up of the unused headless VM `scout-browser` on the old VM host (4 GB RAM) | U | Your call |
 
 ---

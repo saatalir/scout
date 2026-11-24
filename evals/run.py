@@ -94,6 +94,16 @@ def write_report(out_dir: Path, meta: dict, by_suite: dict, verdicts: dict, th: 
     return text
 
 
+def _strata(settings) -> dict:
+    """X4: which Strata these results were measured on (fingerprint and its id), or why it is unknown."""
+    from scout import strata_info
+    try:
+        fp = strata_info.current(settings)
+        return {"id": strata_info.fingerprint_id(fp), **fp}
+    except Exception as e:  # noqa: BLE001 - never fail an eval over its bookkeeping
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--suites", default="all", help=f"comma list from: {', '.join(SUITES)}")
@@ -133,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     verdicts = {n: suite_verdict(n, suite_stats(rs), rs, th) for n, rs in by_suite.items()}
     meta = {"started": started, "model": model, "router": settings.router, "endpoint": settings.base_url,
             "repeats": args.repeats, "wall_s": time.perf_counter() - t0,
-            "host": platform.node(), "python": sys.version.split()[0]}
+            "host": platform.node(), "python": sys.version.split()[0], "strata": _strata(settings)}
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     report = write_report(out_dir, meta, by_suite, verdicts, th)
     print("\n" + report.split("## Cases")[0].strip())

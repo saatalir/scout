@@ -25,7 +25,7 @@ from .library import Item, find_existing, read_front_matter, save_item
 from .llm import LLM
 from .net import http_client
 from .resilience import DeadlineExceeded, Deadline, RetryPolicy, is_transient, run_with_time_limit
-from . import campaign, evidence, sufficiency
+from . import campaign, evidence, sufficiency, trace
 from .task import TaskRecord
 from .tools import academic, web
 
@@ -273,7 +273,12 @@ class Scout:
         self.rec = record
         self.llm = llm or LLM()
         self.ask_approval = ask_approval or (lambda summary: False)       # no human attached: deny
-        self.notify = notify or (lambda msg: None)
+        user_notify = notify or (lambda msg: None)
+
+        def notify_and_trace(msg: str) -> None:          # X2: what the user is told goes into the trace too
+            trace.event(record.dir, "note", text=str(msg)[:500])
+            user_notify(msg)
+        self.notify = notify_and_trace
         self.max_steps = max_steps
         self.client_factory = client_factory
         self.web_search_fn = web_search_fn
@@ -736,15 +741,23 @@ class Scout:
         with a bigger budget, since this model reasons before it answers."""
         budget = 2048
         for _ in range(3):
+            t0 = time.perf_counter()
             try:
                 r = self.model_policy.call(
                     self.llm.chat, "planner", self.rec.messages, tools=tools if tools is not None else self.tools,
                     max_tokens=budget, **({"tool_choice": tool_choice} if tool_choice else {}),
                     on_retry=lambda n, e, w: self.notify(f"model unreachable ({type(e).__name__}); retry {n} in {w:.0f}s"))
             except Exception as e:  # noqa: BLE001
+                trace.event(self.rec.dir, "model_error", seconds=round(time.perf_counter() - t0, 2),
+                            error=f"{type(e).__name__}: {str(e)[:300]}")
                 if is_transient(e):
                     raise ModelUnavailable(f"{type(e).__name__}: {e}") from e
                 raise
+            trace.event(self.rec.dir, "model", seconds=round(time.perf_counter() - t0, 2), max_tokens=budget,
+                        finish_reason=_finish_reason(r), prompt_tokens=getattr(r, "prompt_tokens", None),
+                        completion_tokens=getattr(r, "completion_tokens", None), messages=len(self.rec.messages),
+                        tools=[c.function.name for c in r.tool_calls], text_chars=len(r.text or ""),
+                        offered=len(tools if tools is not None else self.tools))
             if not r.tool_calls and not (r.text or "").strip() and _finish_reason(r) == "length":
                 budget = min(budget * 2, 8192)
                 self.notify(f"model answer cut off; retrying with max_tokens={budget}")
@@ -1058,6 +1071,7 @@ class Scout:
                           f"Run `python -m scout resume {rec.id}` when it is back.")
             self.notify(rec.report)
         finally:
+            trace.event(rec.dir, "end", status=rec.status, steps=len(rec.steps), files=len(rec.files))
             if self._browser is not None and rec.status == "done" and self._browser.actions:
                 try:                                   # B5: a trace of what worked, for promotion into playbooks
                     playbooks.write_trace(rec.dir / "trace.yaml", self._browser.actions, rec.objective)
@@ -1181,6 +1195,7 @@ class Scout:
                 except Exception as e:  # noqa: BLE001 - a failing tool is reported to the model
                     result, ok = {"error": f"{type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}"}, False
                 step = rec.log(name, args, ok, _short(result, 500), time.perf_counter() - t0, call_id=c.id)
+            trace.event(rec.dir, "tool", n=step.n, name=name, ok=ok, seconds=step.seconds, summary=step.summary[:300])
             self.notify(f"[{step.n}] {name} {'ok' if ok else 'FAILED'} ({step.seconds:.1f}s)")
             rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": _short(result)})
             self._after_step(name, ok, result)

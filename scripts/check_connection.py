@@ -93,9 +93,19 @@ def main() -> int:
         r = llm.chat("vision", msg, max_tokens=512)
         return f"{answered(r)!r}"
 
+    def pinned():
+        from scout import strata_info
+        fp = strata_info.current(s)
+        diff = strata_info.differences(fp, strata_info.load_pin())
+        if diff:
+            raise RuntimeError(f"not the Strata the last gate passed on ({'; '.join(diff)[:200]}): rerun "
+                               "python -m evals.run --repeats 3 and the task gates before trusting results")
+        return f"matches the last gate ({strata_info.fingerprint_id(fp)})"
+
     results = [step("reachable", reach), step("models", models)]
     if results[-1]:
         results += [step("chat", chat), step("tool calling", tools), step("image input", vision)]
+        step("strata pin", pinned)          # a warning: setup is fine, but the gates' results may be stale
     print()
     if all(results):
         print("All checks passed. Next: python -m evals.run")
