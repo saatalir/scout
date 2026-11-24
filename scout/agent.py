@@ -729,6 +729,19 @@ class Scout:
             rec.report = (report or r.text or "").strip() or why
         except Exception as e:  # noqa: BLE001
             rec.report = f"{why} (No report: {type(e).__name__}.)"
+        st = rec.state
+        if (self.rigor != "quick" and self.verify and not st.get("verified")
+                and (rec.files or st.get("evidence")) and not rec.report.startswith(why)):
+            # RG2/RG5 on a budget-ended report too: no step is left to fix claims, so unsupported ones are named.
+            st["verified"] = True
+            self.notify("verifying the report against stored sources")
+            v = self._check_report(rec.report)
+            note = v.note()
+            if v.unsupported:
+                note += ("\n\n_Not supported by the sources read (no budget left to fix):_\n"
+                         + "\n".join(f"- {c.get('claim', '')}" for c in v.unsupported[:8]))
+            st["verification_note"] = note
+            rec.report = f"{rec.report}\n\n{self._findings_section()}{note}"
         rec.report += self._record_line()
         rec.status = "partial" if rec.files else "failed"
 

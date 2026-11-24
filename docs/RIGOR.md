@@ -39,6 +39,14 @@ independent supporting sources and any contradiction), the sources by site, and 
 or are contradicted. The pages read are in the task folder under `evidence/`. `thorough` currently behaves like
 `standard`; its finish rules come with RG3–RG4.
 
+**Live check (2026-11-24):** an open-ended question at `standard` ("hydrogen in salt caverns: where, and the
+risks?") read pages from 8 sites and wrote a confident-looking report, then ran out of its 20-step budget. The
+check on that report (15 sources, 16 claims, 69 s, the real model) found **every claim supported, but each by
+one site only** (a library item and the page it came from count once): 16 of 16 findings medium, none
+corroborated. Reading many sites is not the same as corroborating each finding; that is what RG3 enforces at
+`thorough`. The run also showed that a budget-ended report skipped the check; it is now checked too, and claims
+it cannot fix are named.
+
 ## 3. Packages
 
 ### RG1 — Evidence store (C)

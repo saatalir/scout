@@ -215,3 +215,20 @@ def test_cli_stores_the_level_and_resume_keeps_it(monkeypatch):
     assert seen == ["standard", "thorough", "thorough"]
     monkeypatch.setenv("SCOUT_RIGOR", "deep")
     assert scout.cli.main(["run", "--no-tor", "q3"]) == 2
+
+
+def test_a_budget_ended_report_is_checked_too():
+    @contextmanager
+    def client(tor=False):
+        with httpx.Client(transport=httpx.MockTransport(handler)) as c:
+            yield c
+    llm = Fake(FETCH_ALL[:2] + [[call("finish", report="Caverns cycle quickly. Helium on Mars.")]],
+               [{"claims": ["Salt caverns cycle hydrogen quickly.", "Caverns store helium on Mars."]},
+                {"judgements": [{"c": 1, "supports": ["S1", "S2"]}, {"c": 2, "supports": []}]}])
+    rec = TaskRecord.create("What is known about hydrogen in salt caverns?", tor=False)
+    rec.state["rigor"] = "standard"
+    rec = Scout(rec, llm=llm, client_factory=client, max_steps=2,
+                model_policy=RetryPolicy(attempts=2, base=0, sleep=lambda s: None)).run()
+    assert rec.status in ("partial", "failed")
+    assert "high (2 independent)" in rec.report
+    assert "Not supported by the sources read" in rec.report and "helium on Mars" in rec.report
