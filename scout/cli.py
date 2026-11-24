@@ -77,7 +77,8 @@ def _campaign_args(p: argparse.ArgumentParser) -> None:
 def _schedule(a) -> int:
     from . import campaign
     from .schedule import ScheduleError, Scheduler, parse_time
-    sched = Scheduler()
+    from .task import tasks_dir
+    sched = Scheduler(log_dir=lambda tid: tasks_dir() / tid)    # the job's log next to its task record
     try:
         if a.list:
             jobs = sched.list()

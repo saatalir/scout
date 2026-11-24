@@ -295,3 +295,29 @@ def test_the_campaign_check():
     assert evaluate({"allow_partial": True, "checks": {"campaign": True}}, rec, [], 0, 0, [])["campaign"]
     one, _ = session(new_task(), [[call("finish", report="Done at once.")]], extractor=[])
     assert not evaluate({"checks": {"campaign": True}}, one, [], 0, 0, [])["campaign"]   # one session only
+
+
+# -- RG10: the schedule command (the adapter itself: tests/test_schedule.py) ---------------------------
+
+def test_cli_schedule_sets_the_campaign_and_installs(monkeypatch, tmp_path):
+    import scout.cli
+    import scout.schedule as sch
+    from test_schedule import FakeRun
+
+    fake = FakeRun()
+    real = sch.Scheduler
+    monkeypatch.setattr(sch, "Scheduler", lambda **kw: real(system="Darwin", home=tmp_path / "home", run=fake,
+                                                            uid=501, path_env="/usr/bin", **kw))
+    rec = new_task()
+    assert scout.cli.main(["schedule", rec.id, "--daily", "09:30", "--session", "2h", "--max-sessions", "5"]) == 0
+    c = TaskRecord.load(rec.id).state["campaign"]
+    assert c["session_minutes"] == 120 and c["max_sessions"] == 5
+    plist = tmp_path / "home" / "Library" / "LaunchAgents" / f"local.online-scout.{rec.id}.plist"
+    import plistlib
+    data = plistlib.loads(plist.read_bytes())
+    assert data["ProgramArguments"][-5:] == ["resume", rec.id, "--session", "2h", "--unattended"]
+    assert data["StandardOutPath"] == str(rec.dir / "schedule.log")
+    assert scout.cli.main(["schedule", "--list"]) == 0
+    assert scout.cli.main(["schedule", rec.id, "--remove"]) == 0 and not plist.exists()
+    assert scout.cli.main(["schedule", rec.id, "--daily", "25:00", "--session", "2h"]) == 2
+    assert scout.cli.main(["schedule", "no-such-task", "--daily", "09:00", "--session", "2h"]) == 2
