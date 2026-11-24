@@ -120,6 +120,22 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 | D4 | Playbook promotion: repeated successful traces → proposed playbooks for review | C | B5 | A promoted playbook replays f01 | **Built** (`scout/promote.py`, `python -m scout promote`; Strata, 1 round; reviewed: every typed value a param, no objective text, proposals git-ignored). A playbook promoted from the G2 traces replayed f01 live |
 | G3 | Phase 3 gate: v01–v02 plus all earlier tasks | C | D1–D4 | Pass rate ≥ threshold | **Passed** 2026-11-18: 97 % (58/60) over 3 repeats; v01, v02 and f01–f03 3/3 each; r04 and r05 1 fail each (step check). [PHASE3 §6](PHASE3.md#6-results) |
 
+### Rigor — open-ended research
+
+Detail and design: [RIGOR.md](RIGOR.md). A per-task setting `--rigor quick|standard|thorough` (`SCOUT_RIGOR`);
+`quick` is today's behaviour and stays the default until G4.
+
+| ID | Package | Owner | Depends on | Acceptance | State |
+| --- | --- | --- | --- | --- | --- |
+| RG1 | Evidence store: pages read are saved in the task folder and count as sources (not library items) | C | — | Tests: fetched and browser-read pages appear as evidence; resume keeps them | |
+| RG2 | Corroboration in verification: every supporting source per claim, over library items and evidence, batched | C | RG1, RG6 | Tests: a claim backed by two independent sources is counted twice, by two copies once | |
+| RG3 | Sufficiency rules checked in code before finish at `thorough` (corroboration, breadth, saturation, counter-search, no unsupported claims); at most two refusals | C | RG2, RG4 | Tests: each rule refuses a finish that misses it; the budget still ends the task honestly | |
+| RG4 | Counter-evidence searches (`purpose: "counter"`), conflicts reported with both sides | C | — | Tests: the rule counts counter-searches; a conflict reaches the report | |
+| RG5 | Report findings table with confidence computed from the record (high / medium / low) | C | RG2 | Tests: labels follow the source counts, not the model's wording | |
+| RG6 | Independence helpers: registrable domain (eTLD+1), near-duplicate texts, independent groups | **S** | — | Fixture tests; undercounting is safe, overcounting fails | |
+| RG7 | Open-ended eval tasks o01–o06 (answer keys, a single-source trap, a controversy, a thin-evidence question) and their check kinds | S (checks) + C (tasks) | RG3, RG5 | `pytest`; the runner accepts `--rigor` | |
+| G4 | Rigor gate: o01–o06 at `thorough` ≥ 75 % over 3 repeats; the 20 tasks at `quick` without regression; time and steps per level recorded | C | RG1–RG7 | Pass rate ≥ threshold | |
+
 ### Cross-cutting (any time)
 
 | ID | Package | Owner | Notes |
@@ -137,5 +153,6 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 2. SA and VF; G1 baseline. Then LIB with you.
 3. Phase 2: B1 → B2 → B3/B4 (B6, B7 delegated) → B5 → G2.
 4. Phase 3: D1 (rootless podman on the VM) → D2 → D3 → D4 → G3.
+5. Rigor: RG6 (Strata, in the background) ∥ RG1 → RG2 → RG5 → RG4 → RG3 → RG7 → G4.
 
 Each step ends with tests passing, docs updated, and a local commit. Pushes happen when you say so.
