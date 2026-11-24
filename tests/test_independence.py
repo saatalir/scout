@@ -329,3 +329,30 @@ def test_groups_are_sorted_and_ordered_by_smallest_index() -> None:
     assert count_independent(sources) == 3
     assert all(g == sorted(g) for g in groups)
     assert [g[0] for g in groups] == sorted(g[0] for g in groups)
+
+
+# source_key: papers behind a resolver are separate works (found live, 2026-11-24)
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://doi.org/10.1016/j.ijhydene.2020.12.058", "doi:10.1016/j.ijhydene.2020.12.058"),
+    ("http://dx.doi.org/10.3390/EN17143586/", "doi:10.3390/en17143586"),
+    ("https://arxiv.org/abs/2504.12135v2", "arxiv:2504.12135"),
+    ("https://arxiv.org/pdf/2504.12135.pdf", "arxiv:2504.12135"),
+    ("https://www.nature.com/articles/x", "nature.com"),
+    ("https://doi.org/", "doi.org"),
+    ("", ""),
+])
+def test_source_key(url: str, expected: str) -> None:
+    from scout.independence import source_key
+    assert source_key(url) == expected
+
+
+def test_two_papers_behind_doi_org_are_two_sources() -> None:
+    a = {"url": "https://doi.org/10.1016/j.a.1", "text": "Microbes in sump brine consume hydrogen " * 3}
+    b = {"url": "https://doi.org/10.1016/j.b.2", "text": "Cavern wells suffer steel embrittlement " * 3}
+    same = {"url": "https://doi.org/10.1016/J.A.1", "text": "Another abstract about something else entirely"}
+    assert count_independent([a, b]) == 2
+    assert count_independent([a, same]) == 1                # the same DOI, any case: one work
+    v1 = {"url": "https://arxiv.org/abs/2504.12135v1"}
+    v2 = {"url": "https://arxiv.org/pdf/2504.12135v2"}
+    assert count_independent([v1, v2]) == 1

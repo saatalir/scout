@@ -354,5 +354,6 @@ def findings_table(c: Corroboration) -> str:
 
 
 def _short(s: dict) -> str:
-    from .independence import registrable_domain
-    return registrable_domain(s.get("url", "")) or (s.get("title") or "")[:40]
+    from .independence import source_key
+    key = source_key(s.get("url", ""))
+    return (key[:40] + "…" if len(key) > 40 else key) or (s.get("title") or "")[:40]

@@ -151,3 +151,27 @@ def test_quick_and_standard_never_send_a_finish_back():
         assert "Thoroughness rules" not in rec.report
         assert ("searches" in rec.state) == (level == "standard")
         assert ("Rigor:" in scout.rec.messages[1]["content"]) == (level == "standard")
+
+
+# -- fixes from the live run (2026-11-24) -----------------------------------------------------------------
+
+def test_saturation_allows_a_small_share_of_new_results():
+    st = {"searches": [{"purpose": "counter", "results": 8, "new": 2}, {"purpose": "main", "results": 8, "new": 2}]}
+    assert not any(m.startswith("Saturation") for m in sufficiency.process_misses(st, 5))     # 2 of 8: little new
+    st["searches"][-1]["new"] = 3
+    assert any(m.startswith("Saturation") for m in sufficiency.process_misses(st, 5))         # 3 of 8: still finding
+    assert sufficiency.saturated({"results": 0, "new": 0})
+
+
+def test_sub_agent_searches_count_for_the_parent():
+    parent: dict = {}
+    child: dict = {}
+    r = {"results": [{"url": "https://a.example/1"}, {"url": "https://b.example/2"}]}
+    sufficiency.log_search(child, "web_search", "sub q", "counter", r)
+    sufficiency.merge_searches(parent, child)
+    # the parent's own search of the same sites finds nothing new; the sub's counter-search counts
+    assert sufficiency.log_search(parent, "web_search", "q", "main", r)["new"] == 0
+    misses = sufficiency.process_misses(parent, 5)
+    assert not any(m.startswith("Disagreement") for m in misses)
+    assert any(m.startswith("Saturation") for m in misses)    # one search of the main task's own: not enough yet
+    assert parent["searches"][0]["sub"] is True

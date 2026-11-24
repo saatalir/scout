@@ -697,6 +697,7 @@ class Scout:
         with self._files_lock:
             self.rec.files.extend(f for f in child.files if f not in self.rec.files)
             evidence.merge(self.rec.state, child.state.get("evidence", []))
+            sufficiency.merge_searches(self.rec.state, child.state)
         return {"part": n, "question": question, "status": child.status, "saved": len(child.files),
                 "summary": child.report[:1500], "steps": len(child.steps), "task_id": child.id}
 

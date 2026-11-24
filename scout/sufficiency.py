@@ -6,7 +6,9 @@ sources it read, the corroboration of its report), never from what the model say
 Rules (docs/RIGOR.md §3):
 1. sites       — at least MIN_SITES independent sites read (same site or near-copies count once).
 2. counter     — at least MIN_COUNTER searches with purpose "counter" (looking for disagreement).
-3. saturation  — the last SATURATION_WINDOW searches found nothing new (no new site, paper or result).
+3. saturation  — the last SATURATION_WINDOW searches found little that was new: at most SATURATION_SHARE of
+                 their results new to the task. Paper searches always surface some long-tail papers, so "nothing
+                 new at all" is never reached (found live, 2026-11-24: 19 searches, none with fewer than 3 new).
 4. corroborate — every finding is supported by at least two independent sources (checked last: it needs the
                  claim checker, about a minute).
 Unsupported claims are handled by the claim check as before.
@@ -19,6 +21,7 @@ from typing import Any
 MIN_SITES = 5
 MIN_COUNTER = 1
 SATURATION_WINDOW = 2
+SATURATION_SHARE = 0.25   # a search with at most a quarter of its results new counts as "nothing much new"
 MAX_REFUSALS = 2          # then the task finishes anyway, and the report says which rules were not met
 LIST_MAX = 8
 
@@ -55,6 +58,20 @@ def log_search(state: dict, tool: str, query: str, purpose: str, result: Any) ->
     return entry
 
 
+def merge_searches(state: dict, child: dict) -> None:
+    """A sub-agent's searches count for its parent: their results are no longer new, and its counter-searches
+    count. The child's log is appended in its own order; keys the parent already had stay as they are."""
+    seen = state.setdefault("seen_keys", [])
+    known = set(seen)
+    seen.extend(k for k in dict.fromkeys(child.get("seen_keys", [])) if k not in known)
+    state.setdefault("searches", []).extend({**s, "sub": True} for s in child.get("searches", []))
+
+
+def saturated(entry: dict) -> bool:
+    """True when a search found little that was new (at most SATURATION_SHARE of its results)."""
+    return entry.get("new", 0) <= int(SATURATION_SHARE * entry.get("results", 0))
+
+
 def process_misses(state: dict, sites: int) -> list[str]:
     """Rules 1–3: cheap, from the record. `sites` is the number of independent sites read."""
     misses = []
@@ -67,10 +84,11 @@ def process_misses(state: dict, sites: int) -> list[str]:
         misses.append("Disagreement: no counter-search yet. Run web_search or search_papers with purpose \"counter\" "
                       "to look for criticism, disagreement, failed replications or newer data that contradicts your "
                       "findings, and report any conflict with both sides' sources.")
-    last = searches[-SATURATION_WINDOW:]
-    if len(last) < SATURATION_WINDOW or any(s["new"] for s in last):
-        misses.append(f"Saturation: your last {SATURATION_WINDOW} searches still turned up new sites or papers. "
-                      "Search further (other wording, other angles) until new searches stop finding new material.")
+    last = [s for s in searches if not s.get("sub")][-SATURATION_WINDOW:]    # the main task's own last searches
+    if len(last) < SATURATION_WINDOW or not all(saturated(s) for s in last):
+        misses.append(f"Saturation: your last {SATURATION_WINDOW} searches still turned up mostly new sites or "
+                      f"papers (more than {SATURATION_SHARE:.0%} of their results were new). Search further (other "
+                      "wording, other angles) until new searches mostly return what you have already seen.")
     return misses
 
 

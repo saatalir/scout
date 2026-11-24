@@ -37,7 +37,8 @@ that names the unmet rules (R7: honest completion beats a stuck task).
 then ends with a findings table: each finding, its confidence (high / medium / low, computed from the number of
 independent supporting sources and any contradiction), the sources by site, and which findings rest on one source
 or are contradicted. The pages read are in the task folder under `evidence/`. `--rigor thorough` adds the finish rules (`scout/sufficiency.py`): at least 5 independent sites read, at least one
-counter-search (`purpose: "counter"`), the last 2 searches finding nothing new, and every finding backed by two
+counter-search (`purpose: "counter"`), the last 2 searches finding little new (at most a quarter of their
+results new to the task; sub-agents' searches count), and every finding backed by two
 independent sources. A finish that misses one is sent back with what is missing (at most twice, and not in the
 last 4 steps); the report ends with which rules were met. The budget becomes 80 steps and 90 minutes unless given.
 Sub-agents inherit the level's evidence and checks, not the finish rules (the main task applies them).
@@ -49,6 +50,23 @@ one site only** (a library item and the page it came from count once): 16 of 16 
 corroborated. Reading many sites is not the same as corroborating each finding; that is what RG3 enforces at
 `thorough`. The run also showed that a budget-ended report skipped the check; it is now checked too, and claims
 it cannot fix are named.
+
+**Live check at `thorough` (2026-11-24, same question, `--max-steps 50`):** 51 steps in 67 minutes, 4 sub-agents,
+19 searches by the main task (5 of them counter-searches), 43 sources (33 independent), 32 library items.
+The rules worked as designed: breadth and disagreement were met; the finish was sent back twice for saturation
+(steps 34 and 45), then the budget ended and the report said which rules were not met (saturation,
+corroboration). 7 of 16 findings were corroborated by ≥ 2 independent sources (0 of 16 at `standard`); the report
+gained a section on the disagreements found (industry "proven and sealed" framing against experiments on cyclic
+cracking and measured micro-leakage; cost only cheapest at high utilisation). Three fixes came out of the run:
+
+- **Papers behind `doi.org` counted as one site.** Every library item linked by its DOI had the registrable
+  domain `doi.org`. Independence now uses `source_key()`: the DOI or arXiv id behind a resolver link, the
+  registrable domain otherwise (a preprint and its journal version are still caught by the near-copy check).
+  Recomputed on the live run: one more finding becomes high.
+- **Sub-agents' searches were not counted.** Their results looked new to the main task, so saturation could
+  not be reached; and their counter-searches did not count. Their search logs are now merged into the parent's.
+- **"Nothing new at all" is never reached on papers.** Every paper search turned up at least 3 new papers (a long
+  tail). Saturation now means at most a quarter of the results are new.
 
 ## 3. Packages
 

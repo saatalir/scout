@@ -17,6 +17,7 @@ import re
 __all__ = [
     "MULTI_LABEL_SUFFIXES",
     "registrable_domain",
+    "source_key",
     "words",
     "shingles",
     "similarity",
@@ -696,6 +697,33 @@ def near_duplicate(a: str, b: str, threshold: float = 0.6, k: int = 5) -> bool:
     return _near(sa, sb, len(words(a)), len(words(b)), threshold)
 
 
+# Hosts whose pages are each a different work: a DOI resolver or arXiv. Their registrable domain says nothing
+# about who wrote the work, so every paper behind doi.org would look like one site (found live: 2026-11-24).
+DOI_HOSTS = frozenset({"doi.org", "dx.doi.org", "www.doi.org"})
+ARXIV_HOSTS = frozenset({"arxiv.org", "www.arxiv.org", "export.arxiv.org"})
+_DOI_PATH_RE = re.compile(r"^/(10\.\d{4,9}/\S+?)/*$")
+_ARXIV_PATH_RE = re.compile(r"^/(?:abs|pdf)/([^?#]+?)(?:v\d+)?(?:\.pdf)?/*$")
+
+
+def source_key(url: str) -> str:
+    """Who a source belongs to, for independence: ``doi:<doi>`` for a DOI resolver link, ``arxiv:<id>`` for an
+    arXiv paper (any version), else :func:`registrable_domain`. Two different papers are two sources; the same
+    paper as a preprint and on a publisher's site is caught by the near-copy check on their texts."""
+    from urllib.parse import unquote, urlsplit
+    raw = str(url or "").strip()
+    try:
+        parts = urlsplit(raw if "//" in raw else "https://" + raw)
+        host = (parts.hostname or "").rstrip(".")
+    except ValueError:
+        return ""
+    path = unquote(parts.path)
+    if host in DOI_HOSTS and (m := _DOI_PATH_RE.match(path)):
+        return "doi:" + m.group(1).lower()
+    if host in ARXIV_HOSTS and (m := _ARXIV_PATH_RE.match(path)):
+        return "arxiv:" + m.group(1).lower()
+    return registrable_domain(raw)
+
+
 def _field(source: object, key: str) -> str:
     if not isinstance(source, dict):
         return ""
@@ -708,7 +736,8 @@ def _field(source: object, key: str) -> str:
 def independent_groups(sources: list[dict], threshold: float = 0.6) -> list[list[int]]:
     """Group the indices of sources that are NOT independent of each other.
 
-    Sources ``i`` and ``j`` share a group when their registrable domains are equal and non-empty, or when
+    Sources ``i`` and ``j`` share a group when their source keys (:func:`source_key`: the registrable domain,
+    or the DOI / arXiv id behind a resolver link) are equal and non-empty, or when
     both have text and one text is a near-copy of the other. Grouping is transitive (union-find). Each
     returned list is sorted; the groups are ordered by their smallest index.
     """
@@ -730,7 +759,7 @@ def independent_groups(sources: list[dict], threshold: float = 0.6) -> list[list
         else:
             parent[ri] = rj
 
-    domains = [registrable_domain(_field(s, "url")) for s in sources]
+    domains = [source_key(_field(s, "url")) for s in sources]
     texts = [_field(s, "text") for s in sources]
     # Fingerprints once per text, not once per pair: pages can be long and there can be dozens of them.
     sets = [shingles(t) if t else set() for t in texts]
@@ -757,7 +786,7 @@ def count_independent(sources: list[dict], threshold: float = 0.6) -> int:
     shown to be independent."""
     count = 0
     for group in independent_groups(sources, threshold):
-        known = any(registrable_domain(_field(sources[i], "url")) for i in group)
+        known = any(source_key(_field(sources[i], "url")) for i in group)
         has_text = any(_field(sources[i], "text").strip() for i in group)
         if known or has_text:
             count += 1
