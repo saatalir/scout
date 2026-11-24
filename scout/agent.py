@@ -25,7 +25,7 @@ from .library import Item, find_existing, read_front_matter, save_item
 from .llm import LLM
 from .net import http_client
 from .resilience import DeadlineExceeded, Deadline, RetryPolicy, is_transient, run_with_time_limit
-from . import evidence
+from . import evidence, sufficiency
 from .task import TaskRecord
 from .tools import academic, web
 
@@ -46,6 +46,8 @@ def _tool(name: str, description: str, properties: dict, required: list[str] | N
         "parameters": {"type": "object", "properties": properties, "required": required or list(properties)}}}
 
 
+PURPOSE = {"type": "string", "enum": ["main", "counter"], "description": "counter: this search looks for disagreement, criticism, failed replications or newer data contradicting what you found (default main)."}
+
 TOOLS = [
     _tool("search_papers",
           "Tier 1. Search an academic index. Use first for papers and their metadata. Results include doi, arxiv id, "
@@ -58,7 +60,8 @@ TOOLS = [
            "year_from": {"type": "integer", "description": "Earliest publication year, inclusive."},
            "max_results": {"type": "integer", "description": "1-25 (default 8)."},
            "sort": {"type": "string", "enum": ["relevance", "cited"], "description": "openalex only."},
-           "arxiv_id": {"type": "string", "description": "arxiv only: fetch this exact paper, e.g. 1706.03762."}},
+           "arxiv_id": {"type": "string", "description": "arxiv only: fetch this exact paper, e.g. 1706.03762."},
+           "purpose": PURPOSE},
           ["query", "source"]),
     _tool("search_datasets",
           "Tier 1. Find datasets (with downloadable files) in Zenodo or national open-data portals.",
@@ -71,7 +74,8 @@ TOOLS = [
     _tool("web_search",
           "Tier 2. Search the web through a real browser (DuckDuckGo, Brave Search, Google). Use to find pages the "
           "academic APIs do not cover: official pages, reports, datasets.",
-          {"query": {"type": "string"}, "max_results": {"type": "integer", "description": "1-10 (default 8)."}},
+          {"query": {"type": "string"}, "max_results": {"type": "integer", "description": "1-10 (default 8)."},
+           "purpose": PURPOSE},
           ["query"]),
     _tool("fetch_page", "Tier 2. Fetch a web page and return its main text as Markdown.",
           {"url": {"type": "string"}}),
@@ -193,6 +197,7 @@ def _short(obj: Any, limit: int = TOOL_RESULT_CHARS) -> str:
 
 PAPER_FALLBACK = ("openalex", "crossref", "semantic_scholar", "arxiv")   # pubmed only when asked: biomedicine
 TASK_MINUTES = 45                  # wall-clock budget per task (R3)
+THOROUGH_STEPS, THOROUGH_MINUTES = 80, 90   # the default budget at rigor thorough (docs/RIGOR.md)
 TOOL_SECONDS = 240                 # one tool call may not block the loop longer than this
 STUCK_WINDOW = 10                  # steps without new library items before a reflection
 FAIL_STREAK = 3                    # consecutive failed steps before a reflection
@@ -201,6 +206,21 @@ SUB_PARALLEL = 2                   # Strata answers about two requests at once (
 SUB_STEPS, SUB_MINUTES = 15, 15    # budget per research sub-agent
 SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human",  # sub-agents report, never hand off,
                 *BROWSER_TOOL_NAMES, *VISION_TOOL_NAMES, *DESKTOP_TOOL_NAMES, "run_playbook")   # and research without the browser
+
+
+RIGOR_NOTES = {
+    "standard": ("\n\n[Scout] Rigor: standard. The pages you read are kept as evidence. Every claim in your report will "
+                 "be checked against all of them and labelled by how many independent sites support it, so prefer "
+                 "findings you can source, and say so when a finding rests on one source."),
+    "thorough": ("\n\n[Scout] Rigor: thorough. This replaces the advice to stop after two or three searches. Before you "
+                 f"may finish, Scout checks in code that: (1) you read at least {sufficiency.MIN_SITES} independent sites "
+                 "(different organisations, not copies); (2) you ran at least one counter-search (web_search or "
+                 "search_papers with purpose \"counter\") for criticism, disagreement or newer contradicting data, and "
+                 "you report conflicts with both sides' sources; (3) your last searches stopped finding new sites or "
+                 "papers; (4) each finding is supported by at least two independent sources. A finish that misses a "
+                 "rule is sent back with what is missing. For a broad question, split its facets with "
+                 "research_subtasks."),
+}
 
 
 class ModelUnavailable(RuntimeError):
@@ -263,6 +283,11 @@ class Scout:
         self._desktop: Desktop | None = None
         self.approvals = approvals or ApprovalPolicy.from_env()       # ask (default) | auto | deny
         self.rigor = evidence.normalize_rigor(self.rec.state.get("rigor"))   # quick (default) | standard | thorough
+        if self.rigor == "thorough":          # RG3: more room to corroborate; explicit budgets are kept as given
+            if self.max_steps == MAX_STEPS:
+                self.max_steps = THOROUGH_STEPS
+            if task_minutes == TASK_MINUTES:
+                self.deadline = Deadline(THOROUGH_MINUTES * 60)
         st = self.rec.state
         st.setdefault("calls", {})              # signature -> times called
         st.setdefault("fail_streak", 0)
@@ -453,6 +478,32 @@ class Scout:
             self.rec.state["browser_url"] = self._browser.page.url      # where to pick up after a hand-off
         return out
 
+    def _logged(self, tool: str, a: dict, result: Any) -> Any:
+        """RG3/RG4: at rigor standard/thorough, each search is logged with its purpose and how much it found that
+        was new to the task (for the saturation and counter-search rules)."""
+        if self.rigor != "quick":
+            with self._files_lock:
+                sufficiency.log_search(self.rec.state, tool, a.get("query", ""), str(a.get("purpose") or "main"), result)
+        return result
+
+    def _sites_read(self) -> int:
+        """Independent sites among the library items and evidence pages (same site or near-copies count once)."""
+        from .independence import independent_groups
+        from .verify import gather_all_sources
+        sources = gather_all_sources(self.rec.files, list(self.rec.state.get("evidence", [])))
+        return len(independent_groups([{"url": s["url"], "text": s["text"]} for s in sources]))
+
+    def _insufficient(self, report: str) -> list[str]:
+        """RG3: the thoroughness rules that a finish with this report misses. The cheap rules first; the
+        corroboration rule (it needs the claim checker) only when they pass."""
+        misses = sufficiency.process_misses(self.rec.state, self._sites_read())
+        if misses:
+            return misses
+        c = self._check_report(report)
+        if getattr(c, "error", None):
+            return []                                  # the checker failed: never block finishing on it
+        return sufficiency.corroboration_misses(c.claims)
+
     def _keep_evidence(self, url: str, title: str, text: str, via: str) -> None:
         """RG1: at rigor standard/thorough, a page read is kept as evidence in the task folder."""
         if self.rigor == "quick":
@@ -593,11 +644,11 @@ class Scout:
 
     def call(self, client: httpx.Client, name: str, a: dict) -> Any:
         if name == "search_papers":
-            return self._search_papers(client, a)
+            return self._logged("search_papers", a, self._search_papers(client, a))
         if name == "search_datasets":
             return self._search_datasets(client, a)
         if name == "web_search":
-            return self._web_search(a)
+            return self._logged("web_search", a, self._web_search(a))
         if name == "fetch_page":
             page = web.fetch_page(client, a["url"])
             self._keep_evidence(page.url, page.title, page.markdown, "fetch_page")
@@ -742,6 +793,7 @@ class Scout:
                          + "\n".join(f"- {c.get('claim', '')}" for c in v.unsupported[:8]))
             st["verification_note"] = note
             rec.report = f"{rec.report}\n\n{self._findings_section()}{note}"
+        rec.report += self._rules_line()
         rec.report += self._record_line()
         rec.status = "partial" if rec.files else "failed"
 
@@ -749,6 +801,11 @@ class Scout:
         """VF at rigor quick (claims against the saved library items); RG2 at standard/thorough (every supporting
         source per claim, over library items and evidence pages, independence and confidence computed in code)."""
         from .verify import Corroboration, Verification, corroborate_report, verify_report
+        import hashlib
+        digest = hashlib.sha256(report.encode("utf-8")).hexdigest()
+        cached = self.rec.state.get("corroboration")
+        if self.rigor != "quick" and cached and cached.get("report_sha") == digest and not cached.get("error"):
+            return Corroboration(claims=cached["claims"], sources=cached["sources"], unchecked=cached.get("unchecked", 0))
         try:
             if self.rigor == "quick":
                 return run_with_time_limit(verify_report, 300, self.llm, report, self.rec.files)
@@ -757,8 +814,16 @@ class Scout:
         except Exception as e:  # noqa: BLE001 - verification never blocks finishing
             return (Verification if self.rigor == "quick" else Corroboration)(error=type(e).__name__)
         self.rec.state["corroboration"] = {"claims": c.claims, "sources": c.sources, "unchecked": c.unchecked,
-                                           "error": c.error}
+                                           "error": c.error, "report_sha": digest}
         return c
+
+    def _rules_line(self) -> str:
+        """At rigor thorough, which thoroughness rules the finished task met (computed, not claimed)."""
+        if self.rigor != "thorough" or not self.verify:
+            return ""
+        data = self.rec.state.get("corroboration")
+        claims = data["claims"] if data and not data.get("error") else None
+        return "\n\n" + sufficiency.summary(self.rec.state, self._sites_read(), claims)
 
     def _findings_section(self) -> str:
         """RG5: the findings table from the stored corroboration (unsupported claims left out), then a blank line."""
@@ -813,7 +878,8 @@ class Scout:
         rec = self.rec
         if not rec.messages:
             rec.messages = [{"role": "system", "content": SYSTEM},
-                            {"role": "user", "content": rec.objective}]
+                            {"role": "user", "content": rec.objective + RIGOR_NOTES.get(
+                                "standard" if self.rigor == "thorough" and not self.verify else self.rigor, "")}]
             if any(t["function"]["name"] == "run_playbook" for t in self.tools):
                 found = playbooks.matching(rec.objective)
                 if found:
@@ -910,6 +976,18 @@ class Scout:
                     self.notify("finish challenged: failures remain")
                     continue
                 report = str(args.get("report", "")).strip()
+                if (self.rigor == "thorough" and self.verify and st.get("sufficiency_refusals", 0) < sufficiency.MAX_REFUSALS
+                        and len(rec.steps) < self.max_steps - 4):
+                    misses = self._insufficient(report)      # RG3: the model proposes, code checks
+                    if misses:
+                        st["sufficiency_refusals"] = st.get("sufficiency_refusals", 0) + 1
+                        st.setdefault("sufficiency_log", []).append({"step": len(rec.steps), "misses": misses})
+                        rec.messages.append({"role": "tool", "tool_call_id": c.id, "content": (
+                            "Not finished yet — rigor thorough. These rules are not met:\n- " + "\n- ".join(misses)
+                            + "\nWork on them, then call finish again with the full report.")})
+                        rec.save()
+                        self.notify(f"thoroughness: {len(misses)} rule(s) not met, sent back")
+                        continue
                 has_sources = bool(rec.files) or (self.rigor != "quick" and bool(st.get("evidence")))
                 if self.verify and has_sources and not st["verified"]:
                     st["verified"] = True                    # check claims against stored sources, once
@@ -937,6 +1015,7 @@ class Scout:
                     st["verification_note"] = v.note()
                 if st.get("verification_note"):
                     report = f"{report}\n\n{self._findings_section()}{st['verification_note']}"
+                report += self._rules_line()
                 rec.report = report + self._record_line()
                 rec.status = "done"
                 rec.log("finish", {}, True, rec.report[:200])

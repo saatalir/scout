@@ -1,6 +1,6 @@
 # Rigor for open-ended research (plan)
 
-Status (2026-11-24): **`standard` works** (RG1, RG2, RG5, RG6 built); RG3, RG4, RG7–RG10 and gate G4 to do. Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
+Status (2026-11-24): **`standard` and `thorough` work** (RG1–RG6 built); RG7–RG10 and gate G4 to do. Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
 
 ## 1. The problem
 
@@ -36,8 +36,11 @@ that names the unmet rules (R7: honest completion beats a stuck task).
 **Using it now:** `python -m scout run --rigor standard "…"` (or `SCOUT_RIGOR=standard` in `.env`). The report
 then ends with a findings table: each finding, its confidence (high / medium / low, computed from the number of
 independent supporting sources and any contradiction), the sources by site, and which findings rest on one source
-or are contradicted. The pages read are in the task folder under `evidence/`. `thorough` currently behaves like
-`standard`; its finish rules come with RG3–RG4.
+or are contradicted. The pages read are in the task folder under `evidence/`. `--rigor thorough` adds the finish rules (`scout/sufficiency.py`): at least 5 independent sites read, at least one
+counter-search (`purpose: "counter"`), the last 2 searches finding nothing new, and every finding backed by two
+independent sources. A finish that misses one is sent back with what is missing (at most twice, and not in the
+last 4 steps); the report ends with which rules were met. The budget becomes 80 steps and 90 minutes unless given.
+Sub-agents inherit the level's evidence and checks, not the finish rules (the main task applies them).
 
 **Live check (2026-11-24):** an open-ended question at `standard` ("hydrogen in salt caverns: where, and the
 risks?") read pages from 8 sites and wrote a confident-looking report, then ran out of its 20-step budget. The
