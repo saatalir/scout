@@ -263,3 +263,28 @@ def test_new_paper_sources_are_dispatched():
         assert academic.search_papers(c, "q", "semantic_scholar")[0].source == "semantic_scholar"
         assert academic.search_papers(c, "q", "pubmed") == []
     assert seen == ["api.semanticscholar.org", "eutils.ncbi.nlm.nih.gov"]
+
+
+def test_a_cut_off_turn_past_the_deadline_is_not_retried():
+    """G4: length retries ran 1-2 extra turns past a sub-agent's time box. Past the deadline, a cut-off research
+    turn goes straight to the closing report, and that report starts with the bigger budget."""
+    from scout.resilience import Deadline
+    now = [0.0]
+
+    class Slow(Fake):
+        def chat(self, role, messages, **kw):
+            now[0] += 120                                    # every turn takes two minutes
+            return super().chat(role, messages, **kw)
+
+    @contextmanager
+    def client(tor=False):
+        with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as c:
+            yield c
+    llm = Slow([("cut", ""), [call("finish", report="[partial] out of time")]])
+    s = Scout(TaskRecord.create("Find papers on hydrogen.", tor=False), llm=llm, client_factory=client,
+              model_policy=fast_policy())
+    s.deadline = Deadline(60, clock=lambda: now[0])
+    rec = s.run()
+    assert [c["max_tokens"] for c in llm.calls] == [2048, 4096]       # no 4096 retry of the research turn
+    assert llm.calls[1]["tools"] == ["finish"]                         # the second call is the closing report
+    assert rec.status in ("partial", "done", "failed") and "out of time" in rec.report

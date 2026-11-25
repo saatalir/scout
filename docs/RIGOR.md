@@ -1,6 +1,6 @@
 # Rigor for open-ended research (plan)
 
-Status (2026-11-24): **all packages built** (RG1–RG10); gate G4 running (results in §4 when it ends). Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
+Status (2026-11-25): **all packages built** (RG1–RG10); **gate G4 passed** (open-ended 95 % over 3 repeats, quick 93 %; §4). Packages RG1–RG10 and gate G4 in [ROADMAP §3](ROADMAP.md#rigor--open-ended-research).
 
 ## 1. The problem
 
@@ -24,7 +24,7 @@ stored in the task record (`rec.state["rigor"]`) so a resumed task keeps its lev
 
 | Level | For | Behaviour |
 | --- | --- | --- |
-| `quick` | Concrete lookups | **Today's behaviour, unchanged** (keeps G1–G3 comparable). The default until G4 passes |
+| `quick` | Concrete lookups | **Today's behaviour, unchanged** (keeps G1–G3 comparable; the search `purpose` parameter is not offered at this level). The default (kept after G4, §4) |
 | `standard` | Most questions | `quick` plus the evidence store (RG1), per-claim corroboration (RG2) and confidence computed in code (RG5). No extra searching is required, but the report says plainly which findings rest on one source |
 | `thorough` | Open-ended research | `standard` plus the sufficiency rules checked in code before finishing (RG3), a deliberate search for disagreement (RG4), facets split into sub-agents, and a larger budget (80 steps, 90 min) |
 
@@ -188,9 +188,52 @@ awake (launchd runs a missed job at the next wake).
 
 Then decide the default level from the numbers (likely `standard`).
 
+### Results (2026-11-24/25, Strata fingerprint `f560d67bfef7`, pinned in `evals/strata_pin.json`)
+
+| Part | Result | Notes |
+| --- | --- | --- |
+| o01–o06 at `thorough` + c01, 3 repeats | **20/21 = 95 %** (threshold 75 %): **PASS** | o01, o02, o03, o05, o06 and c01 3/3; o04 2/3 |
+| The 20 tasks at `quick`, 3 repeats | **56/60 = 93 %** (G3: 58/60 = 97 %) | Every failure was a step limit with the right answer and item: r05 3/3 (16–17 steps, limit 12), r03 1/3 (9, limit 8) |
+| Campaign c01 (3 sessions of 10 min, `standard`) | 3/3: paused with notes, resumed from a compacted transcript, new evidence in every session, ended by `max_sessions` | Sessions ran 23–35 min instead of 10 (fixed, below) |
+
+**What the gate showed, and what was fixed:**
+
+1. **Campaign sessions overran their time box 3×.** Sub-agents always got 15 minutes each, two at a time,
+   whatever the parent had left. Now a sub-agent gets at most the parent's remaining time less a reserve for the
+   parent's wrap-up (15 % of its budget, at least 3 min); a part with under 2 min is not started, and the
+   result says so. A recheck still showed 14–21 min sessions: a turn cut off by the length limit was retried
+   with a bigger budget even after the deadline (each retry 1–2 min). Now a research turn cut off past the
+   deadline goes straight to the closing report, and the closing report and session notes start with the bigger
+   budget. Second recheck: sessions of 13.1, 12.4 and 12.4 min (c01 passed). The rest is the notes turn and at
+   most one model turn in flight (about 1–2 min each while two requests share Strata): small for real sessions
+   (2 h), large for the test's 10 min.
+2. **Quick took more steps than at G3.** The only change the model sees at `quick` was the new `purpose`
+   parameter on `web_search` and `search_papers`, whose description invites looking for contradicting data (one
+   quick r05 run made a counter-search). It is now offered only at `standard` and `thorough`. Recheck (3
+   repeats): r03 3/3 at 4 steps; r05 1/3 at 8, 14 and 13 steps. r05 was already near its limit at G3 (9, 10,
+   13 steps; 2/3) and the Commission's hydrogen pages have changed since (a new consultation, a page now 404),
+   so it stays a borderline task rather than a regression.
+3. **o04 (thin evidence), one failure, is a check miss.** The report says plainly that no study ran past 12
+   months and that long-term evidence "is lacking"; the check's word list has "lack of" but not "lacking".
+   The check stays as it is (results exist for it, AGENTS.md rule 13).
+
+**Cost per level** (mean per task, this hardware):
+
+| Level | Runs | Steps | Time |
+| --- | --- | --- | --- |
+| `quick` (the 20 lookups) | 60 | 7 | 2.7 min (median 1.7) |
+| `thorough` (o01–o06) | 18 | 74 | 62 min (33–79) |
+| `standard` campaign (c01, 3 × 10 min) | 3 + 2 rechecks | 23 | 100 min at the gate; 41 min after the fixes |
+
+**Default level: `quick` stays the default.** The numbers do not support switching: `standard` was measured
+only inside the campaign, not on the 20 lookups, and `thorough` costs about 20× the time of `quick`. Choose
+the level per task: `--rigor thorough` for open-ended questions (it passed G4 at 95 %), `quick` for lookups.
+Measuring `standard` on the 20 lookups would be the evidence for making it the default.
+
 ## 5. Cost and limits
 
-- `thorough` tasks will take roughly 2–3× as long: more searches, more pages, verification over more sources.
+- `thorough` tasks take much longer than lookups: G4 measured 74 steps and about an hour per open-ended task,
+  against 7 steps and under 3 minutes at `quick` (§4).
   Strata's ~2 parallel requests cap the gain from sub-agents.
 - Domain independence is a proxy: two sites can share an origin that neither cites. Near-copy detection catches
   syndication, not paraphrase.

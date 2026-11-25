@@ -232,3 +232,18 @@ def test_a_budget_ended_report_is_checked_too():
     assert rec.status in ("partial", "failed")
     assert "high (2 independent)" in rec.report
     assert "Not supported by the sources read" in rec.report and "helium on Mars" in rec.report
+
+
+def test_search_purpose_is_offered_only_above_quick():
+    """G4: at quick the model sees exactly the tool schemas the gates G1-G3 measured (no counter-search hint)."""
+    from scout.agent import TOOLS
+
+    def purposes(rigor):
+        rec = TaskRecord.create("q", tor=False)
+        rec.state["rigor"] = rigor
+        tools = Scout(rec, llm=Fake([], [])).tools
+        return {t["function"]["name"] for t in tools if "purpose" in t["function"]["parameters"]["properties"]}
+
+    assert purposes("quick") == set()
+    assert purposes("standard") == purposes("thorough") == {"web_search", "search_papers"}
+    assert any("purpose" in t["function"]["parameters"]["properties"] for t in TOOLS)   # the shared list is untouched

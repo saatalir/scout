@@ -124,7 +124,7 @@ The tag **[S]** marks Strata-delegated packages and **[C]** marks Claude's. **[U
 ### Rigor — open-ended research
 
 Detail and design: [RIGOR.md](RIGOR.md). A per-task setting `--rigor quick|standard|thorough` (`SCOUT_RIGOR`);
-`quick` is today's behaviour and stays the default until G4.
+`quick` is today's behaviour and stays the default (decided after G4: RIGOR.md §4).
 
 | ID | Package | Owner | Depends on | Acceptance | State |
 | --- | --- | --- | --- | --- | --- |
@@ -138,7 +138,7 @@ Detail and design: [RIGOR.md](RIGOR.md). A per-task setting `--rigor quick|stand
 | RG8 | Sessions: `--session 2h` time box; progress notes; status `paused`; a campaign ends by sufficiency, saturation over sessions, `--until`, `--max-sessions` or the user | C | RG1, RG3 | Tests: a session pauses with notes and the next resumes from them | **Built** (`scout/campaign.py`; `--session`, `--until`, `--max-sessions`; notes via a `session_notes` turn, from the record if the model fails) |
 | RG9 | Compaction between sessions: a fresh transcript from the notes, the evidence index and the library; later sessions look for what is new | C | RG8 | Tests: the transcript stays bounded over sessions; no evidence lost | **Built** (system + objective + one state message; old transcripts in `sessions/transcript-<n>.json`) |
 | RG10 | Schedules: `scout schedule <id> --daily 09:00 --session 2h` (launchd on macOS, cron on Linux), list and remove; only by the user's command; every gate kept unattended | C | RG8 | Tests with a fake launchctl; one live scheduled session | **Built** (`scout/schedule.py` by Strata, reviewed; `resume --unattended` skips when the task cannot go on, another session runs, or the model or browser host is down). Live: a generated plist passes `plutil -lint`; the preflight answered against Strata and the VM (0.9 s). No real agent was installed on this Mac: that is the user's call |
-| G4 | Rigor gate: o01–o06 at `thorough` ≥ 75 % over 3 repeats; the 20 tasks at `quick` without regression; time and steps per level recorded | C | RG1–RG7 | Pass rate ≥ threshold | |
+| G4 | Rigor gate: o01–o06 at `thorough` ≥ 75 % over 3 repeats; the 20 tasks at `quick` without regression; time and steps per level recorded | C | RG1–RG7 | Pass rate ≥ threshold | **Passed 2026-11-25**: 95 % (20/21) open-ended, quick 93 % (step-limit overruns only, see RIGOR.md §4); session overruns and the quick schema fixed; Strata pinned; `quick` stays the default |
 
 ### Cross-cutting (any time)
 

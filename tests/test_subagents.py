@@ -126,3 +126,36 @@ def test_concurrent_saves_of_the_same_item_do_not_duplicate():
     with ThreadPoolExecutor(8) as ex:
         results = list(ex.map(lambda i: save_item(Item(title="Same", doi="10.1/same"), task_id="t")[1], range(8)))
     assert results.count(True) == 1
+
+
+# -- sub-agents stay inside the parent's time (a campaign session overran 3x before this) ----------------------
+
+def _parent(minutes, used_seconds):
+    from scout.resilience import Deadline
+    now = [0.0]
+    rec = TaskRecord.create("Survey hydrogen storage.", tor=False)
+    s = Scout(rec, llm=Router({}), client_factory=client, task_minutes=minutes)
+    s.deadline = Deadline(minutes * 60, clock=lambda: now[0])
+    now[0] = used_seconds
+    return s
+
+
+def test_sub_agent_time_is_capped_by_the_parents_deadline():
+    from scout import agent
+    assert _parent(90, 0)._sub_minutes() == agent.SUB_MINUTES             # plenty of time: the normal budget
+    assert _parent(10, 0)._sub_minutes() == pytest.approx(7.0)            # 10-min session less a 3-min reserve
+    assert _parent(10, 400)._sub_minutes() is None                        # under 2 min would be left: not started
+    assert _parent(90, 90 * 60 - 25 * 60)._sub_minutes() == pytest.approx(25 - 13.5)   # reserve = 15 % of 90 min
+
+
+def test_no_sub_agents_when_the_time_is_nearly_used_up():
+    router = Router({
+        "Survey hydrogen": [[call("research_subtasks", subtasks=["salt caverns", "LOHC"])],
+                            [call("finish", report="[done]")]],
+        "salt caverns\n": [[call("finish", report="should not run")]],
+    })
+    rec = TaskRecord.create("Survey hydrogen storage.", tor=False)
+    rec = Scout(rec, llm=router, client_factory=client, task_minutes=4,       # 4 min < reserve + minimum
+                model_policy=RetryPolicy(attempts=2, base=0, sleep=lambda s: None)).run()
+    assert rec.steps[0].ok is False and "too little time" in rec.steps[0].summary
+    assert "salt caverns\n" not in router.tools_seen

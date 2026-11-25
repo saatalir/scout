@@ -134,6 +134,17 @@ PLAYBOOK_TOOL = _tool(
 TOOLS = TOOLS[:-3] + BROWSER_TOOLS + VISION_TOOLS + DESKTOP_TOOLS + [PLAYBOOK_TOOL] + TOOLS[-3:]   # keep request_approval, hand_to_human, finish last
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
+
+def _without_purpose(tool: dict) -> dict:
+    """The tool without the search `purpose` (main/counter): only standard and thorough use it. At quick, its
+    description ("look for disagreement, criticism…") made the model search more than the gates measured."""
+    props = tool["function"]["parameters"]["properties"]
+    if "purpose" not in props:
+        return tool
+    fn = dict(tool["function"], parameters=dict(tool["function"]["parameters"],
+                                                properties={k: v for k, v in props.items() if k != "purpose"}))
+    return dict(tool, function=fn)
+
 SYSTEM = """You are Online Scout, a local-first web research agent. You complete the user's objective with tools.
 
 How to work
@@ -204,6 +215,8 @@ FAIL_STREAK = 3                    # consecutive failed steps before a reflectio
 MODEL_OUTAGE_MINUTES = 10          # keep retrying an unreachable model this long, then pause as "waiting"
 SUB_PARALLEL = 2                   # Strata answers about two requests at once (measured)
 SUB_STEPS, SUB_MINUTES = 15, 15    # budget per research sub-agent
+SUB_RESERVE_SHARE, SUB_RESERVE_MIN = 0.15, 180   # parent time kept back from sub-agents for its own wrap-up (s)
+SUB_MIN_SECONDS = 120              # a part with less time than this left is not started
 SUB_EXCLUDED = ("research_subtasks", "request_approval", "hand_to_human",  # sub-agents report, never hand off,
                 *BROWSER_TOOL_NAMES, *VISION_TOOL_NAMES, *DESKTOP_TOOL_NAMES, "run_playbook")   # and research without the browser
 
@@ -298,6 +311,8 @@ class Scout:
         self._desktop: Desktop | None = None
         self.approvals = approvals or ApprovalPolicy.from_env()       # ask (default) | auto | deny
         self.rigor = evidence.normalize_rigor(self.rec.state.get("rigor"))   # quick (default) | standard | thorough
+        if self.rigor == "quick":             # G4: quick keeps the exact tool schemas the gates G1-G3 measured
+            self.tools = [_without_purpose(t) for t in self.tools]
         if self.rigor == "thorough":          # RG3: more room to corroborate; explicit budgets are kept as given
             if self.max_steps == MAX_STEPS:
                 self.max_steps = THOROUGH_STEPS
@@ -698,13 +713,20 @@ class Scout:
                      "saved (identifiers) and anything you could not do.")
         sub_tools = [t for t in self.tools if t["function"]["name"] not in SUB_EXCLUDED]
         attempt_note = ""
+        child = None
         for attempt in (1, 2):                    # R1 at the agent level: one retry for a sub-agent that got nowhere
+            minutes = self._sub_minutes()
+            if minutes is None:
+                if child is None:
+                    return {"part": n, "question": question, "status": "skipped", "saved": 0, "steps": 0,
+                            "summary": "not started: the task's (or session's) time is nearly used up"}
+                break
             child = TaskRecord.create(objective + attempt_note, tor=self.rec.tor)
             child.state["parent"] = self.rec.id
             child.state["rigor"] = self.rigor
             sub = Scout(child, llm=self.llm, notify=lambda m: self.notify(f"  [sub {n}] {m}"),
                         max_steps=SUB_STEPS, client_factory=self.client_factory, web_search_fn=self.web_search_fn,
-                        task_minutes=SUB_MINUTES, tool_seconds=self.tool_seconds, model_policy=self.model_policy,
+                        task_minutes=minutes, tool_seconds=self.tool_seconds, model_policy=self.model_policy,
                         tools=sub_tools, save_task_id=self.save_task_id, verify=False)
             try:
                 child = sub.run()
@@ -721,25 +743,44 @@ class Scout:
         return {"part": n, "question": question, "status": child.status, "saved": len(child.files),
                 "summary": child.report[:1500], "steps": len(child.steps), "task_id": child.id}
 
+    def _sub_minutes(self) -> float | None:
+        """A sub-agent's time: SUB_MINUTES, but never past the parent's own deadline (a campaign session or the task
+        budget) less a reserve for the parent's wrap-up. None when too little is left to start one."""
+        if self.deadline.seconds is None:
+            return SUB_MINUTES
+        reserve = max(SUB_RESERVE_MIN, SUB_RESERVE_SHARE * self.deadline.seconds)
+        left = self.deadline.remaining() - reserve
+        if left < SUB_MIN_SECONDS:
+            return None
+        return min(SUB_MINUTES, left / 60)
+
     def _subtasks(self, a: dict) -> Any:
         from concurrent.futures import ThreadPoolExecutor
         questions = [q.strip() for q in a.get("subtasks") or [] if isinstance(q, str) and q.strip()][:6]
         if len(questions) < 2:
             return {"error": "research_subtasks needs at least two independent questions"}
+        if self._sub_minutes() is None:
+            return {"error": "too little time is left for sub-agents; work on the most important part directly, "
+                             "or save what you have and finish"}
         self.notify(f"research_subtasks: {len(questions)} parts, {SUB_PARALLEL} at a time")
         with ThreadPoolExecutor(max_workers=SUB_PARALLEL, thread_name_prefix="scout-sub") as ex:
             results = list(ex.map(lambda nq: self._run_sub(nq[0] + 1, nq[1]), enumerate(questions)))
         self.rec.save()
         out = {"parts": results, "saved_total": sum(r["saved"] for r in results)}
-        if all(r["status"] == "failed" for r in results):
+        if any(r["status"] == "skipped" for r in results):
+            out["note"] = "some parts were not started: time ran out; say so in the report or the session notes"
+        if all(r["status"] in ("failed", "skipped") for r in results):
             out["error"] = "every part failed; see the summaries"
         return out
 
     # -- model -------------------------------------------------------------------------------
-    def _model_turn(self, tools: list[dict] | None = None, tool_choice: Any = None) -> Any:
+    def _model_turn(self, tools: list[dict] | None = None, tool_choice: Any = None, *, final: bool = False) -> Any:
         """One planner turn. Outages are retried patiently (R6); a turn cut off by the length limit is retried
-        with a bigger budget, since this model reasons before it answers."""
-        budget = 2048
+        with a bigger budget, since this model reasons before it answers. A final turn (the closing report or the
+        session notes) is a long answer: it starts with the bigger budget. A research turn cut off after the
+        deadline has passed is not retried: the loop goes straight to the closing report (each retry is another
+        full turn, 1-2 minutes, past the time box)."""
+        budget = 4096 if final else 2048
         for _ in range(3):
             t0 = time.perf_counter()
             try:
@@ -759,6 +800,9 @@ class Scout:
                         tools=[c.function.name for c in r.tool_calls], text_chars=len(r.text or ""),
                         offered=len(tools if tools is not None else self.tools))
             if not r.tool_calls and not (r.text or "").strip() and _finish_reason(r) == "length":
+                if not final and self.deadline.expired:
+                    self.notify("model answer cut off after the time budget ended; closing instead of retrying")
+                    return r
                 budget = min(budget * 2, 8192)
                 self.notify(f"model answer cut off; retrying with max_tokens={budget}")
                 continue
@@ -808,7 +852,7 @@ class Scout:
         self._nudge(f"{why} No more tools. Call finish now with an honest report: the checklist of the objective's "
                     "parts ([done]/[partial]/[not done]) and what was tried for what is not done.")
         try:
-            r = self._model_turn(tools=[t for t in self.tools if t["function"]["name"] == "finish"])
+            r = self._model_turn(tools=[t for t in self.tools if t["function"]["name"] == "finish"], final=True)
             report = ""
             for c in r.tool_calls:
                 if c.function.name == "finish":
@@ -953,7 +997,7 @@ class Scout:
                     "and searches run.")
         notes = ""
         try:
-            r = self._model_turn(tools=[SESSION_NOTES_TOOL])
+            r = self._model_turn(tools=[SESSION_NOTES_TOOL], final=True)
             for c in r.tool_calls:
                 if c.function.name == "session_notes":
                     notes = str(json.loads(c.function.arguments or "{}").get("notes", ""))
@@ -1052,6 +1096,8 @@ class Scout:
                     else:
                         r = self._model_turn()
                     rec.messages.append(_assistant_dict(r.message))
+                    if not r.tool_calls and self.deadline.expired:
+                        continue                  # cut off past the time box: the loop's top closes the task
                     if not r.tool_calls:
                         idle += 1
                         if idle >= 3:

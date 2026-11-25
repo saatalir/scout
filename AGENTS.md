@@ -18,6 +18,7 @@ This file is for coding agents. It gives you the facts you need to change this r
 - Phase 0 (model feasibility) is done.
 - The browser layer is done and verified live. Phase 3 (vision, desktop, playbook promotion): **the gate passed** (97 % over 3 repeats, 2026-11-18); see [docs/PHASE3.md](docs/PHASE3.md). Phase 2 (browser tier): **the gate passed** (96 % over 3 repeats, 2026-11-18); see [docs/PHASE2.md](docs/PHASE2.md).
 - Phase 1 (Research Scout): **the gate passed** (96 % over 3 repeats, 2026-11-18); the real library inbox (LIB) is deferred until the user wants it (set `SCOUT_LIBRARY_DIR`). Agent loop, task record, tier 1 APIs, fetch/download, library hand-off, CLI, the fixed task eval set, the resilience layer, parallel sub-agents and claim verification are built. The plan for everything left is [docs/ROADMAP.md](docs/ROADMAP.md); Phase 1 detail is in [docs/PHASE1.md](docs/PHASE1.md); the browser tier (Phase 2) in [docs/PHASE2.md](docs/PHASE2.md).
+- Rigor for open-ended research (RG1–RG10: evidence, corroboration, thoroughness rules, campaigns, schedules): **gate G4 passed** (95 % over 3 repeats, 2026-11-25); `quick` stays the default level; see [docs/RIGOR.md](docs/RIGOR.md).
 - **Core theme: resilience.** Scout must try hard to complete its mission, within safety. The principles R1–R8 are in ROADMAP §1.
 
 ## 2. Repository map

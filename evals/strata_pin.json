@@ -1,0 +1,18 @@
+{
+ "fingerprint": {
+  "model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl",
+  "n_ctx": 262144,
+  "sampling": {
+   "n_predict": -1,
+   "temperature": 1.0,
+   "top_k": 20,
+   "top_p": 0.95
+  },
+  "service": "strata",
+  "slots": 2,
+  "template_sha256": "12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce",
+  "version": null
+ },
+ "gate": "phase 4 tasks, 2026-11-25",
+ "id": "f560d67bfef7"
+}
